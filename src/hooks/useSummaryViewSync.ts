@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect } from "react";
 const SUMMARY_VIEW_KEY = "kk_summary_view";
 const SUMMARY_VIEW_EVENT = "kk-summary-view-change";
 
@@ -15,13 +15,6 @@ export const useSummaryViewSync = <T extends string>({
   parse,
   onReceive,
 }: SummaryViewSyncOptions<T>) => {
-  const parseRef = useRef(parse);
-  const onReceiveRef = useRef(onReceive);
-  useEffect(() => {
-    parseRef.current = parse;
-    onReceiveRef.current = onReceive;
-  }, [onReceive, parse]);
-
   const syncSummaryView = useCallback((value: T) => {
     if (typeof window === "undefined") return;
     const stored = window.localStorage.getItem(SUMMARY_VIEW_KEY);
@@ -33,19 +26,19 @@ export const useSummaryViewSync = <T extends string>({
   useEffect(() => {
     if (!enabled || typeof window === "undefined") return;
     const stored = window.localStorage.getItem(SUMMARY_VIEW_KEY);
-    const parsed = parseRef.current(stored);
+    const parsed = parse(stored);
     if (parsed !== null) {
-      onReceiveRef.current?.(parsed);
+      onReceive?.(parsed);
     }
-  }, [enabled]);
+  }, [enabled, onReceive, parse]);
 
   useEffect(() => {
     if (!enabled || !listen || typeof window === "undefined") return;
     const handleSummaryChange = (event: Event) => {
       const detail = (event as CustomEvent<string>).detail ?? null;
-      const parsed = parseRef.current(detail);
+      const parsed = parse(detail);
       if (parsed !== null) {
-        onReceiveRef.current?.(parsed);
+        onReceive?.(parsed);
       }
     };
     window.addEventListener(
@@ -58,7 +51,7 @@ export const useSummaryViewSync = <T extends string>({
         handleSummaryChange as EventListener
       );
     };
-  }, [enabled, listen]);
+  }, [enabled, listen, onReceive, parse]);
 
   return { syncSummaryView };
 };

@@ -9,10 +9,13 @@ import {
   getTransactionsInRange,
 } from "@/src/db/db";
 import type { Transaction } from "@/src/types";
-import { getTodayRange, isToday } from "@/src/utils/dates";
+import { getRangeForFilter, isToday } from "@/src/utils/dates";
 import { EmptyState } from "@/src/components/EmptyState";
 import { TransactionRow } from "@/src/components/TransactionRow";
 import { TransactionActionSheet } from "@/src/components/TransactionActionSheet";
+import { formatCurrency } from "@/src/utils/money";
+import { useMobileSheet } from "@/src/hooks/useMobileSheet";
+import { useSummaryViewSync } from "@/src/hooks/useSummaryViewSync";
 
 interface TransactionListProps {
   refreshKey?: number;
@@ -34,37 +37,11 @@ const sortTransactions = (items: Transaction[]) =>
         : b.timestamp - a.timestamp
     );
 
-const getRangeForView = (view: "today" | "month") => {
-  const now = new Date();
-  const start = new Date(now);
-  const end = new Date(now);
-  if (view === "today") {
-    const today = getTodayRange(now);
-    start.setTime(today.start);
-    end.setTime(today.end);
-  } else {
-    start.setDate(1);
-    start.setHours(0, 0, 0, 0);
-    end.setMonth(end.getMonth() + 1, 0);
-    end.setHours(23, 59, 59, 999);
-  }
-  return { start: start.getTime(), end: end.getTime() };
-};
-
 const isInRange = (timestamp: number, range: { start: number; end: number }) =>
   timestamp >= range.start && timestamp <= range.end;
 
 const isProcessingRow = (tx: Transaction) =>
   tx.item === "Processing…" || tx.item.startsWith("Processing ");
-
-const formatCurrency = (
-  value: number,
-  options: Intl.NumberFormatOptions = {}
-) =>
-  value.toLocaleString("en-IN", {
-    maximumFractionDigits: 2,
-    ...options,
-  });
 
 export const TransactionList = ({
   refreshKey,
@@ -76,8 +53,6 @@ export const TransactionList = ({
   editedTx,
   onMobileSheetChange,
 }: TransactionListProps) => {
-  const SUMMARY_VIEW_KEY = "kk_summary_view";
-  const SUMMARY_VIEW_EVENT = "kk-summary-view-change";
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [todayTransactions, setTodayTransactions] = useState<Transaction[]>([]);
   const [periodTransactions, setPeriodTransactions] = useState<Transaction[]>([]);
@@ -94,11 +69,15 @@ export const TransactionList = ({
   const [budgetError, setBudgetError] = useState<string | null>(null);
   const [summaryView, setSummaryView] = useState<"today" | "month">("month");
   const [coachmarkDismissed, setCoachmarkDismissed] = useState(false);
-  const [isMobile, setIsMobile] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-  const [mobileSheetTxId, setMobileSheetTxId] = useState<string | null>(null);
-  const [isMobileSheetOpen, setIsMobileSheetOpen] = useState(false);
-  const [mobileConfirmDelete, setMobileConfirmDelete] = useState(false);
+  const {
+    isOpen: isMobileSheetOpen,
+    activeId: mobileSheetTxId,
+    confirmDelete: mobileConfirmDelete,
+    setConfirmDelete: setMobileConfirmDelete,
+    openSheet: openMobileSheet,
+    closeSheet: closeMobileSheet,
+  } = useMobileSheet({ onOpenChange: onMobileSheetChange });
   const transactionsRef = React.useRef<Transaction[]>([]);
   const todayTransactionsRef = React.useRef<Transaction[]>([]);
   const periodTransactionsRef = React.useRef<Transaction[]>([]);
@@ -110,78 +89,16 @@ export const TransactionList = ({
     return `${year}-${month}`;
   })();
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const mobileQuery = window.matchMedia("(max-width: 639px)");
-    const coarseQuery = window.matchMedia("(pointer: coarse)");
-    const updateIsMobile = () => {
-      setIsMobile(mobileQuery.matches || coarseQuery.matches);
-    };
-    updateIsMobile();
-    const add = (query: MediaQueryList) => {
-      if (query.addEventListener) {
-        query.addEventListener("change", updateIsMobile);
-        return () => query.removeEventListener("change", updateIsMobile);
-      }
-      query.addListener(updateIsMobile);
-      return () => query.removeListener(updateIsMobile);
-    };
-    const cleanupMobile = add(mobileQuery);
-    const cleanupCoarse = add(coarseQuery);
-    return () => {
-      cleanupMobile();
-      cleanupCoarse();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!isMobileSheetOpen) return;
-    const html = document.documentElement;
-    const body = document.body;
-    const prevHtmlOverflow = html.style.overflow;
-    const prevBodyOverflow = body.style.overflow;
-    html.style.overflow = "hidden";
-    body.style.overflow = "hidden";
-    return () => {
-      html.style.overflow = prevHtmlOverflow;
-      body.style.overflow = prevBodyOverflow;
-    };
-  }, [isMobileSheetOpen]);
-
-  useEffect(() => {
-    if (!isMobileSheetOpen) return;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setIsMobileSheetOpen(false);
-        setMobileConfirmDelete(false);
-        setMobileSheetTxId(null);
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isMobileSheetOpen]);
-
-  useEffect(() => {
-    onMobileSheetChange?.(isMobileSheetOpen);
-  }, [isMobileSheetOpen, onMobileSheetChange]);
-
-  useEffect(() => {
-    return () => {
-      onMobileSheetChange?.(false);
-    };
-  }, [onMobileSheetChange]);
-
-  const syncSummaryView = useCallback(
-    (next: "today" | "month") => {
-      const stored = window.localStorage.getItem(SUMMARY_VIEW_KEY);
-      if (stored === next) return;
-      window.localStorage.setItem(SUMMARY_VIEW_KEY, next);
-      window.dispatchEvent(
-        new CustomEvent(SUMMARY_VIEW_EVENT, { detail: next })
-      );
+  const { syncSummaryView } = useSummaryViewSync({
+    parse: (value) => {
+      if (value === "today" || value === "month") return value;
+      if (value === "week") return "month";
+      return null;
     },
-    []
-  );
+    onReceive: (value) => {
+      setSummaryView((prev) => (prev === value ? prev : value));
+    },
+  });
 
   const isInCurrentMonth = useCallback((timestamp: number) => {
     const now = new Date();
@@ -203,8 +120,9 @@ export const TransactionList = ({
         if (shouldUpdate()) setTransactions([]);
       });
 
-    const range = getRangeForView(summaryView);
-    const rangePromise = getTransactionsInRange(range.start, range.end)
+    const range = getRangeForFilter(summaryView === "today" ? "today" : "month");
+    const rangePromise = range
+      ? getTransactionsInRange(range.start, range.end)
       .then((items) => {
         if (!shouldUpdate()) return;
         const sorted = sortTransactions(items);
@@ -220,12 +138,14 @@ export const TransactionList = ({
           setPeriodTransactions([]);
           setTodayTransactions([]);
         }
-      });
+      })
+      : Promise.resolve();
 
     const monthPromise =
       summaryView === "today"
         ? (() => {
-          const monthRange = getRangeForView("month");
+          const monthRange = getRangeForFilter("month");
+          if (!monthRange) return Promise.resolve([]);
           return getTransactionsInRange(monthRange.start, monthRange.end);
         })()
           .then((items) => {
@@ -254,37 +174,6 @@ export const TransactionList = ({
       active = false;
     };
   }, [refreshKey, summaryView]);
-
-  useEffect(() => {
-    const stored = window.localStorage.getItem(SUMMARY_VIEW_KEY);
-    if (!stored) return;
-    if (stored === "today" || stored === "month") {
-      setSummaryView(stored);
-    } else if (stored === "week") {
-      setSummaryView("month");
-    }
-  }, []);
-
-  useEffect(() => {
-    const handleSummaryChange = (event: Event) => {
-      const detail = (event as CustomEvent<string>).detail;
-      if (detail === "today" || detail === "month") {
-        setSummaryView(detail);
-      } else if (detail === "week") {
-        setSummaryView("month");
-      }
-    };
-    window.addEventListener(
-      SUMMARY_VIEW_EVENT,
-      handleSummaryChange as EventListener
-    );
-    return () => {
-      window.removeEventListener(
-        SUMMARY_VIEW_EVENT,
-        handleSummaryChange as EventListener
-      );
-    };
-  }, []);
 
   useEffect(() => {
     const stored = window.localStorage.getItem("kk_budgets");
@@ -360,8 +249,8 @@ export const TransactionList = ({
       return sortTransactions(prev);
     });
     setPeriodTransactions((prev) => {
-      const range = getRangeForView(summaryView);
-      const inRange = isInRange(editedTx.timestamp, range);
+      const range = getRangeForFilter(summaryView === "today" ? "today" : "month");
+      const inRange = range ? isInRange(editedTx.timestamp, range) : false;
       const exists = prev.find((tx) => tx.id === editedTx.id);
       if (inRange) {
         if (exists) {
@@ -792,18 +681,6 @@ export const TransactionList = ({
 
   const mobileSheetTx = mobileSheetTxId ? findTxById(mobileSheetTxId) : null;
 
-  const openMobileSheet = useCallback((id: string) => {
-    setMobileSheetTxId(id);
-    setMobileConfirmDelete(false);
-    setIsMobileSheetOpen(true);
-  }, []);
-
-  const closeMobileSheet = useCallback(() => {
-    setIsMobileSheetOpen(false);
-    setMobileConfirmDelete(false);
-    setMobileSheetTxId(null);
-  }, []);
-
   if (!isLoading && transactions.length === 0) {
     return (
       <motion.div
@@ -914,7 +791,6 @@ export const TransactionList = ({
                   tx={tx}
                   index={index}
                   metaVariant="date"
-                  isMobile={isMobile}
                   hasEdit={hasEdit}
                   onEdit={hasEdit ? handleEdit : undefined}
                   onDelete={handleDelete}

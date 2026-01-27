@@ -733,6 +733,17 @@ body::before {
   box-shadow: 0 0 0 3px rgba(255, 107, 53, 0.18);
 }
 
+/* Show only on coarse pointers or small screens */
+.kk-mobile-only {
+  display: none;
+}
+
+@media (pointer: coarse), (max-width: 639px) {
+  .kk-mobile-only {
+    display: inline-flex;
+  }
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    Category Icons with Ember Glow
    ═══════════════════════════════════════════════════════════════════════════ */
