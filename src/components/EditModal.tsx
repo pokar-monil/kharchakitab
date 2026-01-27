@@ -6,6 +6,8 @@ import { X } from "lucide-react";
 import { CATEGORY_OPTIONS } from "@/src/config/categories";
 import { PAYMENT_OPTIONS, type PaymentKey } from "@/src/config/payments";
 import { useEscapeKey } from "@/src/hooks/useEscapeKey";
+import { toDateInputValue } from "@/src/utils/dates";
+import { normalizeAmount } from "@/src/utils/money";
 
 interface EditModalProps {
   isOpen: boolean;
@@ -25,14 +27,6 @@ interface EditModalProps {
   }) => void;
 }
 
-const toDateInputValue = (value: number) => {
-  const date = new Date(value);
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-};
-
 const mergeDateWithTime = (dateValue: string, timeValue: number) => {
   const time = new Date(timeValue);
   const [year, month, day] = dateValue.split("-").map(Number);
@@ -47,11 +41,6 @@ const mergeDateWithTime = (dateValue: string, timeValue: number) => {
     time.getMilliseconds()
   );
   return Number.isNaN(merged.getTime()) ? timeValue : merged.getTime();
-};
-
-const normalizeAmount = (value: number) => {
-  if (!Number.isFinite(value)) return value;
-  return Math.round(value * 100) / 100;
 };
 
 const sanitizeAmountInput = (value: string) => {

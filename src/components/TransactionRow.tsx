@@ -14,7 +14,6 @@ interface TransactionRowProps {
   tx: Transaction;
   index: number;
   metaVariant: MetaVariant;
-  isMobile: boolean;
   hasEdit: boolean;
   onEdit?: (id: string) => void;
   onDelete: (id: string) => void;
@@ -51,7 +50,6 @@ export const TransactionRow = React.memo(
     tx,
     index,
     metaVariant,
-    isMobile,
     hasEdit,
     onEdit,
     onDelete,
@@ -143,7 +141,7 @@ export const TransactionRow = React.memo(
           onDelete={onDelete}
         />
 
-        {isMobile && !isProcessing && (
+        {!isProcessing && (
           <button
             type="button"
             onClick={(event) => {
@@ -151,7 +149,7 @@ export const TransactionRow = React.memo(
               onOpenMobileSheet(tx.id);
             }}
             aria-label={`More actions for ${tx.item}`}
-            className="kk-icon-btn kk-icon-btn-ghost h-8 w-8 sm:hidden"
+            className="kk-icon-btn kk-icon-btn-ghost h-8 w-8 kk-mobile-only"
           >
             <MoreHorizontal className="h-4 w-4" />
           </button>

@@ -1,5 +1,6 @@
 import { openDB, type DBSchema, type IDBPIndex } from "idb";
 import type { Transaction } from "@/src/types";
+import { normalizeAmount } from "@/src/utils/money";
 
 interface QuickLogDB extends DBSchema {
   transactions: {
@@ -30,11 +31,6 @@ const generateId = () => {
     return crypto.randomUUID();
   }
   return `tx_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-};
-
-const normalizeAmount = (value: number) => {
-  if (!Number.isFinite(value)) return value;
-  return Math.round(value * 100) / 100;
 };
 
 const collectTransactions = async (

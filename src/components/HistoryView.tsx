@@ -16,11 +16,14 @@ import {
 import type { Transaction } from "@/src/types";
 import { useEscapeKey } from "@/src/hooks/useEscapeKey";
 import { EmptyState } from "@/src/components/EmptyState";
-import { getTodayRange } from "@/src/utils/dates";
+import { FilterKey, getRangeForFilter, toDateInputValue } from "@/src/utils/dates";
 import { TransactionRow } from "@/src/components/TransactionRow";
 import { TransactionActionSheet } from "@/src/components/TransactionActionSheet";
+import { formatCurrency as formatCurrencyUtil } from "@/src/utils/money";
+import { useMobileSheet } from "@/src/hooks/useMobileSheet";
+import { useSummaryViewSync } from "@/src/hooks/useSummaryViewSync";
+const HISTORY_PAGE_SIZE = 30;
 
-type FilterKey = "today" | "week" | "month" | "custom";
 type SummaryView = "today" | "week" | "month";
 
 interface HistoryViewProps {
@@ -32,23 +35,8 @@ interface HistoryViewProps {
   refreshKey?: number;
 }
 
-const PAGE_SIZE = 30;
-const SUMMARY_VIEW_KEY = "kk_summary_view";
-const SUMMARY_VIEW_EVENT = "kk-summary-view-change";
-
-const isSummaryView = (value: string | null): value is SummaryView =>
-  value === "today" || value === "week" || value === "month";
-
 const mapFilterToSummaryView = (value: FilterKey): SummaryView =>
   value === "custom" ? "month" : value;
-
-const syncSummaryView = (value: SummaryView) => {
-  if (typeof window === "undefined") return;
-  const stored = window.localStorage.getItem(SUMMARY_VIEW_KEY);
-  if (stored === value) return;
-  window.localStorage.setItem(SUMMARY_VIEW_KEY, value);
-  window.dispatchEvent(new CustomEvent(SUMMARY_VIEW_EVENT, { detail: value }));
-};
 
 type ChartMeta = {
   CHART: {
@@ -75,7 +63,7 @@ interface TrendChartProps {
   bucket: "hour" | "day";
   totalBase: number;
   totalPrev: number;
-  formatCurrency: (value: number) => string;
+  formatCurrency: (value: number, options?: Intl.NumberFormatOptions) => string;
 }
 
 const TrendChart = React.memo(
@@ -299,29 +287,6 @@ const TrendChart = React.memo(
   }
 );
 
-const toInputDate = (value: Date) => {
-  const offset = value.getTimezoneOffset();
-  const local = new Date(value.getTime() - offset * 60000);
-  return local.toISOString().slice(0, 10);
-};
-
-const getWeekStart = (date: Date) => {
-  const start = new Date(date);
-  const day = start.getDay();
-  const diff = (day + 6) % 7;
-  start.setDate(start.getDate() - diff);
-  start.setHours(0, 0, 0, 0);
-  return start;
-};
-
-const getWeekEnd = (date: Date) => {
-  const start = getWeekStart(date);
-  const end = new Date(start);
-  end.setDate(end.getDate() + 6);
-  end.setHours(23, 59, 59, 999);
-  return end;
-};
-
 export const HistoryView = ({
   isOpen,
   onClose,
@@ -343,15 +308,34 @@ export const HistoryView = ({
   const listRef = useRef<HTMLDivElement | null>(null);
   const listRequestRef = useRef(0);
   const skipSummarySyncRef = useRef(false);
+  const { syncSummaryView } = useSummaryViewSync<SummaryView>({
+    enabled: isOpen,
+    listen: false,
+    parse: (value) =>
+      value === "today" || value === "week" || value === "month"
+        ? value
+        : null,
+    onReceive: (value) => {
+      setFilter((prev) => {
+        if (prev === value) return prev;
+        skipSummarySyncRef.current = true;
+        return value;
+      });
+    },
+  });
   const [isExporting, setIsExporting] = useState(false);
   const [isMetricsLoading, setIsMetricsLoading] = useState(false);
   const [metricsVersion, setMetricsVersion] = useState(0);
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [renderLimit, setRenderLimit] = useState(200);
-  const [isMobile, setIsMobile] = useState(false);
-  const [mobileSheetTxId, setMobileSheetTxId] = useState<string | null>(null);
-  const [isMobileSheetOpen, setIsMobileSheetOpen] = useState(false);
-  const [mobileConfirmDelete, setMobileConfirmDelete] = useState(false);
+  const {
+    isOpen: isMobileSheetOpen,
+    activeId: mobileSheetTxId,
+    confirmDelete: mobileConfirmDelete,
+    setConfirmDelete: setMobileConfirmDelete,
+    openSheet: openMobileSheet,
+    closeSheet: closeMobileSheet,
+  } = useMobileSheet();
   const hasEdit = Boolean(onEdit);
   const metricsCacheRef = useRef(
     new Map<
@@ -376,62 +360,9 @@ export const HistoryView = ({
   );
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    const mobileQuery = window.matchMedia("(max-width: 639px)");
-    const coarseQuery = window.matchMedia("(pointer: coarse)");
-    const updateIsMobile = () => {
-      setIsMobile(mobileQuery.matches || coarseQuery.matches);
-    };
-    updateIsMobile();
-    const add = (query: MediaQueryList) => {
-      if (query.addEventListener) {
-        query.addEventListener("change", updateIsMobile);
-        return () => query.removeEventListener("change", updateIsMobile);
-      }
-      query.addListener(updateIsMobile);
-      return () => query.removeListener(updateIsMobile);
-    };
-    const cleanupMobile = add(mobileQuery);
-    const cleanupCoarse = add(coarseQuery);
-    return () => {
-      cleanupMobile();
-      cleanupCoarse();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!isMobileSheetOpen) return;
-    const html = document.documentElement;
-    const body = document.body;
-    const prevHtmlOverflow = html.style.overflow;
-    const prevBodyOverflow = body.style.overflow;
-    html.style.overflow = "hidden";
-    body.style.overflow = "hidden";
-    return () => {
-      html.style.overflow = prevHtmlOverflow;
-      body.style.overflow = prevBodyOverflow;
-    };
-  }, [isMobileSheetOpen]);
-
-  useEffect(() => {
-    if (!isMobileSheetOpen) return;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setIsMobileSheetOpen(false);
-        setMobileConfirmDelete(false);
-        setMobileSheetTxId(null);
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isMobileSheetOpen]);
-
-  useEffect(() => {
     if (isOpen) return;
-    setIsMobileSheetOpen(false);
-    setMobileConfirmDelete(false);
-    setMobileSheetTxId(null);
-  }, [isOpen]);
+    closeMobileSheet();
+  }, [closeMobileSheet, isOpen]);
 
   const [allocationMode, setAllocationMode] = useState<"amount" | "count">(
     "amount"
@@ -491,92 +422,22 @@ export const HistoryView = ({
     }
   };
 
-  const range = useMemo(() => {
-    const now = new Date();
-    const start = new Date(now);
-    const end = new Date(now);
-    if (filter === "today") {
-      const today = getTodayRange(now);
-      start.setTime(today.start);
-      end.setTime(today.end);
-    } else if (filter === "week") {
-      const weekStart = getWeekStart(now);
-      start.setTime(weekStart.getTime());
-      end.setTime(getWeekEnd(now).getTime());
-    } else if (filter === "month") {
-      start.setDate(1);
-      start.setHours(0, 0, 0, 0);
-      end.setMonth(end.getMonth() + 1, 0);
-      end.setHours(23, 59, 59, 999);
-    } else if (filter === "custom") {
-      if (!customStart || !customEnd) return null;
-      const startDate = new Date(customStart);
-      const endDate = new Date(customEnd);
-      if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
-        return null;
-      }
-      if (startDate.getTime() > endDate.getTime()) {
-        return null;
-      }
-      start.setTime(startDate.getTime());
-      end.setTime(endDate.getTime());
-      start.setHours(0, 0, 0, 0);
-    }
-    if (filter !== "week" && filter !== "month") {
-      end.setHours(23, 59, 59, 999);
-    }
-    return { start: start.getTime(), end: end.getTime() };
-  }, [filter, customStart, customEnd]);
+  const range = useMemo(
+    () => getRangeForFilter(filter, { customStart, customEnd }),
+    [filter, customStart, customEnd]
+  );
 
   const changeRange = useMemo(() => {
     if (filter === "custom") return range;
-    const now = new Date();
-    const start = new Date(now);
-    const end = new Date(now);
-    if (filter === "today") {
-      const today = getTodayRange(now);
-      start.setTime(today.start);
-      end.setTime(today.end);
-    } else if (filter === "week") {
-      const weekStart = getWeekStart(now);
-      start.setTime(weekStart.getTime());
-      end.setTime(getWeekEnd(now).getTime());
-    } else if (filter === "month") {
-      start.setDate(1);
-      start.setHours(0, 0, 0, 0);
-      end.setMonth(end.getMonth() + 1, 0);
-      end.setHours(23, 59, 59, 999);
-    }
-    if (filter !== "week" && filter !== "month") {
-      end.setHours(23, 59, 59, 999);
-    }
-    return { start: start.getTime(), end: end.getTime() };
+    return getRangeForFilter(filter);
   }, [filter, range]);
 
   useEffect(() => {
     if (filter === "custom") return;
-    const now = new Date();
-    const start = new Date(now);
-    const end = new Date(now);
-    if (filter === "today") {
-      const today = getTodayRange(now);
-      start.setTime(today.start);
-      end.setTime(today.end);
-    } else if (filter === "week") {
-      const weekStart = getWeekStart(now);
-      start.setTime(weekStart.getTime());
-      end.setTime(getWeekEnd(now).getTime());
-    } else if (filter === "month") {
-      start.setDate(1);
-      start.setHours(0, 0, 0, 0);
-      end.setMonth(end.getMonth() + 1, 0);
-      end.setHours(23, 59, 59, 999);
-    }
-    if (filter !== "week" && filter !== "month") {
-      end.setHours(23, 59, 59, 999);
-    }
-    setCustomStart(toInputDate(start));
-    setCustomEnd(toInputDate(end));
+    const nextRange = getRangeForFilter(filter);
+    if (!nextRange) return;
+    setCustomStart(toDateInputValue(nextRange.start));
+    setCustomEnd(toDateInputValue(nextRange.end));
   }, [filter]);
 
   const fetchPage = useCallback(
@@ -585,7 +446,7 @@ export const HistoryView = ({
         ? getTransactionsInRange(
           range.start,
           range.end,
-          PAGE_SIZE,
+          HISTORY_PAGE_SIZE,
           cursorValue
         )
         : Promise.resolve([] as Transaction[]),
@@ -600,7 +461,7 @@ export const HistoryView = ({
       const data = await fetchPage();
       if (listRequestRef.current !== requestId) return;
       setItems(data);
-      setHasMore(data.length >= PAGE_SIZE);
+      setHasMore(data.length >= HISTORY_PAGE_SIZE);
       setCursor(data.length ? data[data.length - 1].timestamp : undefined);
     } finally {
       if (listRequestRef.current === requestId) {
@@ -617,7 +478,7 @@ export const HistoryView = ({
       const data = await fetchPage(cursor);
       if (listRequestRef.current !== requestId) return;
       setItems((prev) => [...prev, ...data]);
-      setHasMore(data.length >= PAGE_SIZE);
+      setHasMore(data.length >= HISTORY_PAGE_SIZE);
       setCursor(data.length ? data[data.length - 1].timestamp : cursor);
     } finally {
       if (listRequestRef.current === requestId) {
@@ -628,23 +489,13 @@ export const HistoryView = ({
 
   useEffect(() => {
     if (!isOpen) return;
-    if (typeof window === "undefined") return;
-    const stored = window.localStorage.getItem(SUMMARY_VIEW_KEY);
-    if (!isSummaryView(stored)) return;
-    if (stored === filter) return;
-    skipSummarySyncRef.current = true;
-    setFilter(stored);
-  }, [isOpen]);
-
-  useEffect(() => {
-    if (!isOpen) return;
     if (skipSummarySyncRef.current) {
       skipSummarySyncRef.current = false;
       return;
     }
     if (filter === "week") return;
     syncSummaryView(mapFilterToSummaryView(filter));
-  }, [filter, isOpen]);
+  }, [filter, isOpen, syncSummaryView]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -675,14 +526,8 @@ export const HistoryView = ({
 
 
   const formatCurrency = useCallback(
-    (
-      value: number,
-      options: Intl.NumberFormatOptions = {}
-    ) =>
-      value.toLocaleString("en-IN", {
-        maximumFractionDigits: 2,
-        ...options,
-      }),
+    (value: number, options: Intl.NumberFormatOptions = {}) =>
+      formatCurrencyUtil(value, options),
     []
   );
 
@@ -1268,18 +1113,6 @@ export const HistoryView = ({
 
   const mobileSheetTx = mobileSheetTxId ? findTxById(mobileSheetTxId) : null;
 
-  const openMobileSheet = useCallback((id: string) => {
-    setMobileSheetTxId(id);
-    setMobileConfirmDelete(false);
-    setIsMobileSheetOpen(true);
-  }, []);
-
-  const closeMobileSheet = useCallback(() => {
-    setIsMobileSheetOpen(false);
-    setMobileConfirmDelete(false);
-    setMobileSheetTxId(null);
-  }, []);
-
   const donutSegments = useMemo(() => {
     if (allocationMetrics.totalRange <= 0) return [];
     if (allocationMetrics.topCategories.length < 1) return [];
@@ -1709,7 +1542,6 @@ export const HistoryView = ({
                                 tx={tx}
                                 index={index}
                                 metaVariant="time"
-                                isMobile={isMobile}
                                 hasEdit={hasEdit}
                                 onEdit={hasEdit ? handleEdit : undefined}
                                 onDelete={handleDelete}
