@@ -54,18 +54,18 @@ export const metadata: Metadata = {
     locale: "en_IN",
     images: [
       {
-        url: "/og-image.png",
-        width: 1200,
-        height: 630,
+        url: "/icon.svg",
+        width: 512,
+        height: 512,
         alt: `${SITE_NAME} logo`,
       },
     ],
   },
   twitter: {
-    card: "summary_large_image",
+    card: "summary",
     title: defaultTitle,
     description: SITE_DESCRIPTION,
-    images: ["/og-image.png"],
+    images: ["/icon.svg"],
   },
   robots: {
     index: true,
@@ -77,8 +77,8 @@ export const metadata: Metadata = {
   },
   icons: {
     icon: "/icon.svg",
-    apple: "/icon-512.png",
-    shortcut: "/icon-192.png",
+    apple: "/icon.svg",
+    shortcut: "/icon.svg",
   },
   manifest: "/manifest.json",
   formatDetection: {
@@ -122,9 +122,9 @@ const structuredData = {
     "@type": "Organization",
     name: SITE_NAME,
     url: SITE_URL,
-    logo: `${SITE_URL}/icon-512.png`,
+    logo: `${SITE_URL}/icon.svg`,
   },
-  image: `${SITE_URL}/og-image.png`,
+  image: `${SITE_URL}/icon.svg`,
 };
 
 export default function RootLayout({
@@ -134,15 +134,13 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <head>
+      <body
+        className={`${bodyFont.variable} ${displayFont.variable} ${monoFont.variable} antialiased`}
+      >
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(structuredData) }}
         />
-      </head>
-      <body
-        className={`${bodyFont.variable} ${displayFont.variable} ${monoFont.variable} antialiased`}
-      >
         {children}
       </body>
     </html>

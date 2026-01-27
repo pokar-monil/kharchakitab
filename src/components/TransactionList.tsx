@@ -1,36 +1,27 @@
 "use client";
 
-import React, { startTransition, useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Listbox, Transition } from "@headlessui/react";
-import { ImageUp, Info, Wallet, ChevronDown, Check } from "lucide-react";
+import { Info, Wallet } from "lucide-react";
 import {
   deleteTransaction,
-  fetchTransactions,
-  updateTransaction,
-  isTransactionShared,
-  getDeviceIdentity,
+  getRecentTransactions,
+  getTransactionsInRange,
 } from "@/src/db/db";
 import type { Transaction } from "@/src/types";
-import { getRangeForFilter, isToday } from "@/src/utils/dates";
+import { getTodayRange, isToday } from "@/src/utils/dates";
 import { EmptyState } from "@/src/components/EmptyState";
 import { TransactionRow } from "@/src/components/TransactionRow";
 import { TransactionActionSheet } from "@/src/components/TransactionActionSheet";
-import { formatCurrency } from "@/src/utils/money";
-import { useMobileSheet } from "@/src/hooks/useMobileSheet";
-import { useSummaryViewSync } from "@/src/hooks/useSummaryViewSync";
 
 interface TransactionListProps {
   refreshKey?: number;
   onViewAll?: () => void;
   onEdit?: (tx: Transaction) => void;
   onDeleted?: (tx: Transaction) => void;
-  onReceiptUploadClick?: () => void;
-  isReceiptProcessing?: boolean;
   addedTx?: Transaction | null;
   deletedTx?: Transaction | null;
   editedTx?: Transaction | null;
-  pendingTransactions?: Transaction[];
   onMobileSheetChange?: (isOpen: boolean) => void;
 }
 
@@ -43,82 +34,54 @@ const sortTransactions = (items: Transaction[]) =>
         : b.timestamp - a.timestamp
     );
 
+const getRangeForView = (view: "today" | "month") => {
+  const now = new Date();
+  const start = new Date(now);
+  const end = new Date(now);
+  if (view === "today") {
+    const today = getTodayRange(now);
+    start.setTime(today.start);
+    end.setTime(today.end);
+  } else {
+    start.setDate(1);
+    start.setHours(0, 0, 0, 0);
+    end.setMonth(end.getMonth() + 1, 0);
+    end.setHours(23, 59, 59, 999);
+  }
+  return { start: start.getTime(), end: end.getTime() };
+};
+
 const isInRange = (timestamp: number, range: { start: number; end: number }) =>
   timestamp >= range.start && timestamp <= range.end;
 
 const isProcessingRow = (tx: Transaction) =>
   tx.item === "Processing…" || tx.item.startsWith("Processing ");
 
-const CompactBudgetRow = ({
-  title,
-  subtitle,
-  actionLabel,
-  onAction,
-  tone = "neutral",
-  onDismiss,
-}: {
-  title: string;
-  subtitle?: string;
-  actionLabel: string;
-  onAction: () => void;
-  tone?: "neutral" | "coachmark";
-  onDismiss?: () => void;
-}) => (
-  <div
-    className={`rounded-[var(--kk-radius-md)] border px-4 py-3 ${tone === "coachmark"
-      ? "border-[var(--kk-ember)]/30 bg-[var(--kk-ember)]/[0.06]"
-      : "border-[var(--kk-smoke)] bg-white/80"
-      }`}
-  >
-    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-      <div className="min-w-0 text-center sm:text-left sm:pr-2">
-        <div className="truncate text-sm font-medium text-[var(--kk-ink)]">
-          {title}
-        </div>
-        {subtitle && <div className="kk-meta mt-0.5">{subtitle}</div>}
-      </div>
-      <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:justify-end">
-        {onDismiss && (
-          <button
-            type="button"
-            onClick={onDismiss}
-            className="kk-btn-ghost kk-btn-compact w-full sm:w-auto"
-            aria-label="Dismiss budget nudge"
-            title="Dismiss"
-          >
-            Not now
-          </button>
-        )}
-        <button
-          type="button"
-          onClick={onAction}
-          className="kk-btn-secondary kk-btn-compact w-full sm:w-auto"
-        >
-          {actionLabel}
-        </button>
-      </div>
-    </div>
-  </div>
-);
+const formatCurrency = (
+  value: number,
+  options: Intl.NumberFormatOptions = {}
+) =>
+  value.toLocaleString("en-IN", {
+    maximumFractionDigits: 2,
+    ...options,
+  });
 
-export const TransactionList = React.memo(({
+export const TransactionList = ({
   refreshKey,
   onViewAll,
   onEdit,
   onDeleted,
-  onReceiptUploadClick,
-  isReceiptProcessing = false,
   addedTx,
   deletedTx,
   editedTx,
-  pendingTransactions = [],
   onMobileSheetChange,
 }: TransactionListProps) => {
+  const SUMMARY_VIEW_KEY = "kk_summary_view";
+  const SUMMARY_VIEW_EVENT = "kk-summary-view-change";
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [todayTransactions, setTodayTransactions] = useState<Transaction[]>([]);
   const [periodTransactions, setPeriodTransactions] = useState<Transaction[]>([]);
   const [monthTotal, setMonthTotal] = useState<number | null>(null);
-  const [identity, setIdentity] = useState<{ device_id: string } | null>(null);
   const [budgets, setBudgets] = useState<{
     monthly: number | null;
     coachmarkDismissedMonth?: string | null;
@@ -131,51 +94,91 @@ export const TransactionList = React.memo(({
   const [budgetError, setBudgetError] = useState<string | null>(null);
   const [summaryView, setSummaryView] = useState<"today" | "month">("month");
   const [coachmarkDismissed, setCoachmarkDismissed] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const hasLoadedOnce = React.useRef(false);
-  const {
-    isOpen: isMobileSheetOpen,
-    activeId: mobileSheetTxId,
-    confirmDelete: mobileConfirmDelete,
-    setConfirmDelete: setMobileConfirmDelete,
-    openSheet: baseOpenMobileSheet,
-    closeSheet: closeMobileSheet,
-  } = useMobileSheet({ onOpenChange: onMobileSheetChange });
-  const [isMobileSheetShared, setIsMobileSheetShared] = useState(false);
-
-  const openMobileSheet = useCallback(async (id: string) => {
-    const shared = await isTransactionShared(id);
-    setIsMobileSheetShared(shared);
-    baseOpenMobileSheet(id);
-  }, [baseOpenMobileSheet]);
-  const transactionsRef = React.useRef<Transaction[]>([]);
-  const todayTransactionsRef = React.useRef<Transaction[]>([]);
-  const periodTransactionsRef = React.useRef<Transaction[]>([]);
+  const [isMobile, setIsMobile] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [mobileSheetTxId, setMobileSheetTxId] = useState<string | null>(null);
+  const [isMobileSheetOpen, setIsMobileSheetOpen] = useState(false);
+  const [mobileConfirmDelete, setMobileConfirmDelete] = useState(false);
   const hasEdit = Boolean(onEdit);
-  const currentMonthKey = useMemo(() => {
+  const currentMonthKey = (() => {
     const now = new Date();
     const year = now.getFullYear();
     const month = String(now.getMonth() + 1).padStart(2, "0");
     return `${year}-${month}`;
-  }, []);
-
-  const { syncSummaryView } = useSummaryViewSync({
-    parse: (value) => {
-      if (value === "today" || value === "month") return value;
-      if (value === "week") return "month";
-      return null;
-    },
-    onReceive: (value) => {
-      setSummaryView((prev) => (prev === value ? prev : value));
-    },
-  });
+  })();
 
   useEffect(() => {
-    void (async () => {
-      const id = await getDeviceIdentity();
-      setIdentity(id);
-    })();
+    if (typeof window === "undefined") return;
+    const mobileQuery = window.matchMedia("(max-width: 639px)");
+    const coarseQuery = window.matchMedia("(pointer: coarse)");
+    const updateIsMobile = () => {
+      setIsMobile(mobileQuery.matches || coarseQuery.matches);
+    };
+    updateIsMobile();
+    const add = (query: MediaQueryList) => {
+      if (query.addEventListener) {
+        query.addEventListener("change", updateIsMobile);
+        return () => query.removeEventListener("change", updateIsMobile);
+      }
+      query.addListener(updateIsMobile);
+      return () => query.removeListener(updateIsMobile);
+    };
+    const cleanupMobile = add(mobileQuery);
+    const cleanupCoarse = add(coarseQuery);
+    return () => {
+      cleanupMobile();
+      cleanupCoarse();
+    };
   }, []);
+
+  useEffect(() => {
+    if (!isMobileSheetOpen) return;
+    const html = document.documentElement;
+    const body = document.body;
+    const prevHtmlOverflow = html.style.overflow;
+    const prevBodyOverflow = body.style.overflow;
+    html.style.overflow = "hidden";
+    body.style.overflow = "hidden";
+    return () => {
+      html.style.overflow = prevHtmlOverflow;
+      body.style.overflow = prevBodyOverflow;
+    };
+  }, [isMobileSheetOpen]);
+
+  useEffect(() => {
+    if (!isMobileSheetOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsMobileSheetOpen(false);
+        setMobileConfirmDelete(false);
+        setMobileSheetTxId(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isMobileSheetOpen]);
+
+  useEffect(() => {
+    onMobileSheetChange?.(isMobileSheetOpen);
+  }, [isMobileSheetOpen, onMobileSheetChange]);
+
+  useEffect(() => {
+    return () => {
+      onMobileSheetChange?.(false);
+    };
+  }, [onMobileSheetChange]);
+
+  const syncSummaryView = useCallback(
+    (next: "today" | "month") => {
+      const stored = window.localStorage.getItem(SUMMARY_VIEW_KEY);
+      if (stored === next) return;
+      window.localStorage.setItem(SUMMARY_VIEW_KEY, next);
+      window.dispatchEvent(
+        new CustomEvent(SUMMARY_VIEW_EVENT, { detail: next })
+      );
+    },
+    []
+  );
 
   const isInCurrentMonth = useCallback((timestamp: number) => {
     const now = new Date();
@@ -187,17 +190,9 @@ export const TransactionList = React.memo(({
   }, []);
 
   const reloadTransactions = useCallback((isActive?: () => boolean) => {
-    if (!identity) return;
     const shouldUpdate = () => (isActive ? isActive() : true);
-    if (!hasLoadedOnce.current) setIsLoading(true);
-    // Cap "activity" views to "now" so scheduled/future entries don't pollute spent/last-txns UI.
-    // BUG-4 fix: Snap to end-of-today so the cache key stays stable across calls.
-    const eod = new Date();
-    eod.setHours(23, 59, 59, 999);
-    const beforeNow = eod.getTime() + 1;
-
-    // Always fetch recent 5 transactions
-    const recentPromise = fetchTransactions({ limit: 5, ownerId: identity.device_id, before: beforeNow })
+    setIsLoading(true);
+    const recentPromise = getRecentTransactions(5)
       .then((items) => {
         if (shouldUpdate()) setTransactions(sortTransactions(items));
       })
@@ -205,48 +200,49 @@ export const TransactionList = React.memo(({
         if (shouldUpdate()) setTransactions([]);
       });
 
-    // A: Always fetch month range; derive today in-memory when needed (saves 1 IDB call)
-    const monthRange = getRangeForFilter("month");
-    const rangePromise = monthRange
-      ? fetchTransactions({ range: { start: monthRange.start, end: monthRange.end }, ownerId: identity.device_id, before: beforeNow })
-        .then((items) => {
-          if (!shouldUpdate()) return;
-          const sorted = sortTransactions(items);
-          startTransition(() => {
-            if (summaryView === "today") {
-              const todayItems = sorted.filter((tx) => isToday(tx.timestamp));
-              setPeriodTransactions(todayItems);
-              setTodayTransactions(todayItems);
-              const total = items
-                .filter((tx) => !isProcessingRow(tx))
-                .reduce((sum, tx) => sum + tx.amount, 0);
-              setMonthTotal((prev) => (prev === total ? prev : total));
-            } else {
-              setPeriodTransactions(sorted);
-              setTodayTransactions(sorted.filter((tx) => isToday(tx.timestamp)));
-            }
-          });
-        })
-        .catch(() => {
-          if (shouldUpdate()) {
-            startTransition(() => {
-              setPeriodTransactions([]);
-              setTodayTransactions([]);
-              if (summaryView === "today") {
-                setMonthTotal((prev) => (prev === null ? prev : null));
-              }
-            });
-          }
-        })
-      : Promise.resolve();
+    const range = getRangeForView(summaryView);
+    const rangePromise = getTransactionsInRange(range.start, range.end)
+      .then((items) => {
+        if (!shouldUpdate()) return;
+        const sorted = sortTransactions(items);
+        setPeriodTransactions(sorted);
+        if (summaryView === "today") {
+          setTodayTransactions(sorted);
+        } else {
+          setTodayTransactions(sorted.filter((tx) => isToday(tx.timestamp)));
+        }
+      })
+      .catch(() => {
+        if (shouldUpdate()) {
+          setPeriodTransactions([]);
+          setTodayTransactions([]);
+        }
+      });
 
-    Promise.allSettled([recentPromise, rangePromise]).then(() => {
-      if (shouldUpdate()) {
-        hasLoadedOnce.current = true;
-        setIsLoading(false);
-      }
+    const monthPromise =
+      summaryView === "today"
+        ? (() => {
+          const monthRange = getRangeForView("month");
+          return getTransactionsInRange(monthRange.start, monthRange.end);
+        })()
+          .then((items) => {
+            if (!shouldUpdate()) return;
+            const total = items
+              .filter((tx) => !isProcessingRow(tx))
+              .reduce((sum, tx) => sum + tx.amount, 0);
+            setMonthTotal((prev) => (prev === total ? prev : total));
+          })
+          .catch(() => {
+            if (shouldUpdate()) setMonthTotal((prev) => (prev === null ? prev : null));
+          })
+        : null;
+
+    const promises = [recentPromise, rangePromise];
+    if (monthPromise) promises.push(monthPromise);
+    Promise.allSettled(promises).then(() => {
+      if (shouldUpdate()) setIsLoading(false);
     });
-  }, [summaryView, identity]);
+  }, [summaryView]);
 
   useEffect(() => {
     let active = true;
@@ -254,7 +250,38 @@ export const TransactionList = React.memo(({
     return () => {
       active = false;
     };
-  }, [refreshKey, summaryView, identity]);
+  }, [refreshKey, summaryView]);
+
+  useEffect(() => {
+    const stored = window.localStorage.getItem(SUMMARY_VIEW_KEY);
+    if (!stored) return;
+    if (stored === "today" || stored === "month") {
+      setSummaryView(stored);
+    } else if (stored === "week") {
+      setSummaryView("month");
+    }
+  }, []);
+
+  useEffect(() => {
+    const handleSummaryChange = (event: Event) => {
+      const detail = (event as CustomEvent<string>).detail;
+      if (detail === "today" || detail === "month") {
+        setSummaryView(detail);
+      } else if (detail === "week") {
+        setSummaryView("month");
+      }
+    };
+    window.addEventListener(
+      SUMMARY_VIEW_EVENT,
+      handleSummaryChange as EventListener
+    );
+    return () => {
+      window.removeEventListener(
+        SUMMARY_VIEW_EVENT,
+        handleSummaryChange as EventListener
+      );
+    };
+  }, []);
 
   useEffect(() => {
     const stored = window.localStorage.getItem("kk_budgets");
@@ -293,23 +320,11 @@ export const TransactionList = React.memo(({
   }, [deletedTx, summaryView, isInCurrentMonth]);
 
   useEffect(() => {
-    transactionsRef.current = transactions;
-  }, [transactions]);
-
-  useEffect(() => {
-    todayTransactionsRef.current = todayTransactions;
-  }, [todayTransactions]);
-
-  useEffect(() => {
-    periodTransactionsRef.current = periodTransactions;
-  }, [periodTransactions]);
-
-  useEffect(() => {
     if (!editedTx) return;
     const previous =
-      transactionsRef.current.find((tx) => tx.id === editedTx.id) ??
-      todayTransactionsRef.current.find((tx) => tx.id === editedTx.id) ??
-      periodTransactionsRef.current.find((tx) => tx.id === editedTx.id) ??
+      transactions.find((tx) => tx.id === editedTx.id) ??
+      todayTransactions.find((tx) => tx.id === editedTx.id) ??
+      periodTransactions.find((tx) => tx.id === editedTx.id) ??
       null;
     setTransactions((prev) =>
       sortTransactions(prev.map((tx) => (tx.id === editedTx.id ? editedTx : tx)))
@@ -330,8 +345,8 @@ export const TransactionList = React.memo(({
       return sortTransactions(prev);
     });
     setPeriodTransactions((prev) => {
-      const range = getRangeForFilter(summaryView === "today" ? "today" : "month");
-      const inRange = range ? isInRange(editedTx.timestamp, range) : false;
+      const range = getRangeForView(summaryView);
+      const inRange = isInRange(editedTx.timestamp, range);
       const exists = prev.find((tx) => tx.id === editedTx.id);
       if (inRange) {
         if (exists) {
@@ -365,7 +380,7 @@ export const TransactionList = React.memo(({
         setMonthTotal((prev) => (prev === null ? prev : prev + delta));
       }
     }
-  }, [editedTx, summaryView, isInCurrentMonth]);
+  }, [editedTx, summaryView, isInCurrentMonth, periodTransactions, todayTransactions, transactions]);
 
   useEffect(() => {
     if (!addedTx) return;
@@ -391,36 +406,33 @@ export const TransactionList = React.memo(({
       };
     }, [summaryView, todayTransactions, periodTransactions]);
 
-  const recentTransactions = useMemo(
-    () => [...pendingTransactions, ...transactions].slice(0, 5),
-    [pendingTransactions, transactions]
-  );
+  const recentTransactions = transactions;
   const monthToDateTotal = summaryView === "month" ? viewTotal : monthTotal;
   const activeBudget = budgets.monthly;
   const hasBudget = typeof activeBudget === "number" && activeBudget > 0;
-  const { remaining, overspend, budgetPercent, rawRemaining } = useMemo(() => {
+  const { remaining, overspend, budgetPercent } = useMemo(() => {
     if (!hasBudget) {
-      return { remaining: null, overspend: false, budgetPercent: 0, rawRemaining: null };
+      return { remaining: null, overspend: false, budgetPercent: 0 };
     }
     const total = monthToDateTotal ?? viewTotal;
-    const raw = activeBudget - total;
     return {
-      remaining: Math.max(raw, 0),
-      overspend: raw < 0,
+      remaining: Math.max(activeBudget - total, 0),
+      overspend: total > activeBudget,
       budgetPercent: Math.min(total / activeBudget, 1),
-      rawRemaining: raw,
     };
   }, [activeBudget, hasBudget, monthToDateTotal, viewTotal]);
 
   const budgetLabel = "Monthly Budget";
-  const resetHintLabel = useMemo(() => {
+  const resetHintLabel = (() => {
     const nextMonth = new Date();
     nextMonth.setMonth(nextMonth.getMonth() + 1, 1);
     return `Resets on ${nextMonth.toLocaleDateString("en-IN", {
       month: "short",
       day: "numeric",
     })}`;
-  }, []);
+  })();
+  const COACHMARK_MIN_TRANSACTIONS = 1;
+
   const handleBudgetSave = () => {
     if (budgetDraft.trim() === "") {
       setBudgetError("Enter a positive number");
@@ -460,33 +472,22 @@ export const TransactionList = React.memo(({
 
   const isPacingView = summaryView !== "month";
   const pacingLabel = "Daily cap";
-  const daysLeftInMonth = useMemo(() => {
+  const daysLeftInMonth = (() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
     monthEnd.setHours(0, 0, 0, 0);
     const MS_DAY = 24 * 60 * 60 * 1000;
     return Math.floor((monthEnd.getTime() - today.getTime()) / MS_DAY) + 1;
-  }, []);
-  const pacingSpent = viewTotal;
-  const pacingTarget =
-    hasBudget &&
-      isPacingView &&
-      rawRemaining !== null &&
-      daysLeftInMonth > 0
-      ? (() => {
-        // Solve (B - (M + x)) / D = T + x for x.
-        // B = activeBudget, M = monthToDateTotal (includes today), T = pacingSpent, D = daysLeftInMonth.
-        return (activeBudget - (monthToDateTotal ?? viewTotal) - daysLeftInMonth * pacingSpent) /
-          (daysLeftInMonth + 1);
-      })()
+  })();
+  const dailyCap =
+    hasBudget && remaining !== null && daysLeftInMonth > 0
+      ? remaining / daysLeftInMonth
       : 0;
-  const pacingCap =
-    summaryView === "today" ? pacingSpent + Math.max(pacingTarget, 0) : 0;
-  const pacingRemaining = Math.max(pacingTarget, 0);
-  const pacingOverspend =
-    hasBudget && isPacingView && pacingTarget < 0;
-  const pacingOverspendAmount = Math.max(-pacingTarget, 0);
+  const pacingCap = summaryView === "today" ? dailyCap : 0;
+  const pacingSpent = viewTotal;
+  const pacingRemaining = Math.max(pacingCap - pacingSpent, 0);
+  const pacingOverspend = hasBudget && isPacingView && pacingSpent > pacingCap;
   const pacingPercent =
     hasBudget && isPacingView && pacingCap > 0
       ? Math.min(pacingSpent / pacingCap, 1)
@@ -494,11 +495,60 @@ export const TransactionList = React.memo(({
   const pacingTooltip = `Spent ₹${formatCurrency(pacingSpent)} / Cap ₹${formatCurrency(
     pacingCap
   )} • ${pacingOverspend
-    ? `Over by ₹${formatCurrency(pacingOverspendAmount)}`
+    ? `Remaining -₹${formatCurrency(pacingSpent - pacingCap)}`
     : `Remaining ₹${formatCurrency(pacingRemaining)}`}`;
 
-
-  // compactBudgetRow extracted to module scope (CompactBudgetRow)
+  const compactBudgetRow = ({
+    title,
+    subtitle,
+    actionLabel,
+    onAction,
+    tone = "neutral",
+    onDismiss,
+  }: {
+    title: string;
+    subtitle?: string;
+    actionLabel: string;
+    onAction: () => void;
+    tone?: "neutral" | "coachmark";
+    onDismiss?: () => void;
+  }) => (
+    <div
+      className={`rounded-[var(--kk-radius-md)] border px-4 py-3 ${tone === "coachmark"
+        ? "border-[var(--kk-ember)]/30 bg-[var(--kk-ember)]/[0.06]"
+        : "border-[var(--kk-smoke)] bg-white/80"
+        }`}
+    >
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0 text-center sm:text-left sm:pr-2">
+          <div className="truncate text-sm font-medium text-[var(--kk-ink)]">
+            {title}
+          </div>
+          {subtitle && <div className="kk-meta mt-0.5">{subtitle}</div>}
+        </div>
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:justify-end">
+          {onDismiss && (
+            <button
+              type="button"
+              onClick={onDismiss}
+              className="kk-btn-ghost kk-btn-compact w-full sm:w-auto"
+              aria-label="Dismiss budget nudge"
+              title="Dismiss"
+            >
+              Not now
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onAction}
+            className="kk-btn-secondary kk-btn-compact w-full sm:w-auto"
+          >
+            {actionLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 
   const budgetSurface = (
     <div className="kk-surface kk-shadow-sm px-4 py-4 sm:px-5 sm:py-4">
@@ -606,7 +656,8 @@ export const TransactionList = React.memo(({
     summaryView === "month" &&
     !hasBudget &&
     !isEditingBudget &&
-    !coachmarkDismissed;
+    !coachmarkDismissed &&
+    totalCount >= COACHMARK_MIN_TRANSACTIONS;
 
   const budgetBlock = (() => {
     if (summaryView !== "month") return null;
@@ -616,16 +667,14 @@ export const TransactionList = React.memo(({
     }
 
     if (!coachmarkEligible) return null;
-    return (
-      <CompactBudgetRow
-        title="Want a monthly budget?"
-        subtitle="See monthly progress and pace limits"
-        actionLabel="Add"
-        onAction={openBudgetEditor}
-        tone="coachmark"
-        onDismiss={dismissCoachmark}
-      />
-    );
+    return compactBudgetRow({
+      title: "Want a monthly budget?",
+      subtitle: "See monthly progress and pace limits",
+      actionLabel: "Add",
+      onAction: openBudgetEditor,
+      tone: "coachmark",
+      onDismiss: dismissCoachmark,
+    });
   })();
 
   const pacingBlock =
@@ -633,7 +682,7 @@ export const TransactionList = React.memo(({
       <div className="mt-4 rounded-[var(--kk-radius-md)] border border-[var(--kk-smoke)] bg-white/70 p-4">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="flex w-full items-center justify-between gap-2">
-            <div className="kk-label">Safe to spend today</div>
+            <div className="kk-label">Daily Allowance</div>
             <button
               type="button"
               onClick={openBudgetEditorFromPacing}
@@ -645,21 +694,19 @@ export const TransactionList = React.memo(({
           </div>
         </div>
         <div className="mt-3 flex items-center justify-start gap-4">
-          {pacingOverspend ? (
-            <div>
-              <div className="kk-meta">Over by</div>
-              <div className="text-base font-semibold text-[var(--kk-danger-ink)]">
-                ₹{formatCurrency(pacingOverspendAmount)}
-              </div>
+          <div>
+            <div className="kk-meta">Remaining</div>
+            <div
+              className={`text-base font-semibold ${pacingOverspend
+                ? "text-[var(--kk-danger-ink)]"
+                : "text-[var(--kk-ink)]"
+                }`}
+            >
+              {pacingOverspend
+                ? `-₹${formatCurrency(pacingSpent - pacingCap)}`
+                : `₹${formatCurrency(pacingRemaining)}`}
             </div>
-          ) : (
-            <div>
-              <div className="kk-meta">Remaining</div>
-              <div className="text-base font-semibold text-[var(--kk-ink)]">
-                ₹{formatCurrency(pacingRemaining)}
-              </div>
-            </div>
-          )}
+          </div>
         </div>
         <button
           type="button"
@@ -712,31 +759,21 @@ export const TransactionList = React.memo(({
     [findTxById, onEdit]
   );
 
-  const handleTogglePrivate = useCallback(
-    async (id: string, nextPrivate: boolean) => {
-      const shared = await isTransactionShared(id);
-      if (shared && nextPrivate) return; // Prevent marking shared as private
-      const tx = findTxById(id);
-      if (!tx) return;
-      await updateTransaction(id, { is_private: nextPrivate });
-      reloadTransactions();
-    },
-    [findTxById, reloadTransactions]
-  );
-
   const mobileSheetTx = mobileSheetTxId ? findTxById(mobileSheetTxId) : null;
-  const hasReceiptEntry = Boolean(onReceiptUploadClick);
 
-  if (isLoading) {
-    return (
-      <div className="space-y-5">
-        <div className="kk-card h-36 animate-pulse bg-[var(--kk-mist)]/50 sm:h-44" />
-        <div className="kk-card h-64 animate-pulse bg-[var(--kk-mist)]/50" />
-      </div>
-    );
-  }
+  const openMobileSheet = useCallback((id: string) => {
+    setMobileSheetTxId(id);
+    setMobileConfirmDelete(false);
+    setIsMobileSheetOpen(true);
+  }, []);
 
-  if (transactions.length === 0 && pendingTransactions.length === 0) {
+  const closeMobileSheet = useCallback(() => {
+    setIsMobileSheetOpen(false);
+    setMobileConfirmDelete(false);
+    setMobileSheetTxId(null);
+  }, []);
+
+  if (!isLoading && transactions.length === 0) {
     return (
       <motion.div
         initial={{ opacity: 0, y: 16 }}
@@ -747,7 +784,7 @@ export const TransactionList = React.memo(({
         <EmptyState
           icon={<Wallet className="h-8 w-8 text-[var(--kk-ash)]" />}
           title="Your ledger is empty"
-          subtitle="Tap the mic to log your first expense"
+          subtitle="Tap the mic or share a receipt screenshot to log your first expense"
           className="py-2"
         />
       </motion.div>
@@ -764,57 +801,19 @@ export const TransactionList = React.memo(({
         className="kk-card overflow-hidden p-5"
       >
         <div className="flex flex-wrap items-center justify-center gap-3">
-          <Listbox
+          <select
             value={summaryView}
-            onChange={(next) => {
+            onChange={(event) => {
+              const next = event.target.value as "today" | "month";
               setSummaryView(next);
               syncSummaryView(next);
             }}
+            className="kk-input kk-input-compact kk-select kk-shadow-sm h-8 !w-auto min-w-[110px] max-w-[160px] rounded-full px-3 text-center"
+            style={{ textAlignLast: "center" }}
           >
-            <div className="relative">
-              <Listbox.Button className="kk-input kk-input-compact kk-select kk-shadow-sm flex h-8 !w-auto min-w-[110px] max-w-[160px] items-center justify-between rounded-full px-3 text-center">
-                <span className="flex-1 text-center">
-                  {summaryView === "today" ? "Today" : "This month"}
-                </span>
-                <ChevronDown className="h-3.5 w-3.5 text-[var(--kk-ash)]" />
-              </Listbox.Button>
-              <Transition
-                enter="transition ease-out duration-120"
-                enterFrom="opacity-0 -translate-y-1"
-                enterTo="opacity-100 translate-y-0"
-                leave="transition ease-in duration-90"
-                leaveFrom="opacity-100 translate-y-0"
-                leaveTo="opacity-0 -translate-y-1"
-              >
-                <Listbox.Options className="absolute z-50 mt-2 w-full min-w-[140px] overflow-hidden rounded-xl border border-[var(--kk-smoke)] bg-white p-1 text-sm shadow-[var(--kk-shadow-lg)]">
-                  {[
-                    { key: "today" as const, label: "Today" },
-                    { key: "month" as const, label: "This month" },
-                  ].map((option) => (
-                    <Listbox.Option
-                      key={option.key}
-                      value={option.key}
-                      className={({ active }) =>
-                        `flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 text-sm ${active
-                          ? "bg-[var(--kk-cream)] text-[var(--kk-ink)]"
-                          : "text-[var(--kk-ash)]"
-                        }`
-                      }
-                    >
-                      {({ selected }) => (
-                        <>
-                          <span className={`truncate ${selected ? "font-semibold text-[var(--kk-ink)]" : ""}`}>
-                            {option.label}
-                          </span>
-                          {selected && <Check className="h-4 w-4 text-[var(--kk-ember)]" />}
-                        </>
-                      )}
-                    </Listbox.Option>
-                  ))}
-                </Listbox.Options>
-              </Transition>
-            </div>
-          </Listbox>
+            <option value="today">Today</option>
+            <option value="month">This month</option>
+          </select>
         </div>
         <div className="mt-4 flex flex-col items-center gap-3 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between">
           <div className="text-center sm:text-left">
@@ -849,33 +848,6 @@ export const TransactionList = React.memo(({
         {summaryView === "month" && <div className="mt-5">{budgetBlock}</div>}
       </motion.div>
 
-      {hasReceiptEntry && (
-        <motion.div
-          initial={{ opacity: 0, y: 16 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.4, delay: 0.05 }}
-        >
-          {/* <button
-            type="button"
-            onClick={onReceiptUploadClick}
-            disabled={isReceiptProcessing}
-            aria-label="Upload receipt"
-            className="group flex w-full items-center justify-between gap-4 rounded-[var(--kk-radius-md)] border border-[var(--kk-smoke)] bg-[var(--kk-cream)]/40 px-4 py-4 text-left transition hover:border-[var(--kk-smoke-heavy)] hover:bg-[var(--kk-cream)]/60 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <div className="flex items-center gap-3">
-              <span className="flex h-9 w-9 items-center justify-center rounded-full border border-[var(--kk-smoke)] bg-white/70 text-[var(--kk-ash)]">
-                <ImageUp className="h-4 w-4" />
-              </span>
-              <div>
-                <div className="kk-meta mt-0.5">
-                  Upload a receipt to auto-fill transactions
-                </div>
-              </div>
-            </div>
-          </button> */}
-        </motion.div>
-      )}
-
       {/* Recent Transactions Card */}
       <motion.div
         initial={{ opacity: 0, y: 16 }}
@@ -901,42 +873,28 @@ export const TransactionList = React.memo(({
         </div>
 
         <div className="mt-5 space-y-3">
-          {recentTransactions.length === 0 ? (
-            <div className="py-6 text-center text-sm text-[var(--kk-ash)]">
-              No recent transactions
-            </div>
-          ) : (
-            <AnimatePresence mode="popLayout">
-              {recentTransactions.map((tx, index) => {
-                const processing = isProcessingRow(tx);
-                const rowKey = tx.id || `recent-${index}`;
-                const date = new Date(tx.timestamp);
-                const day = String(date.getDate());
-                const month = date
-                  .toLocaleDateString("en-IN", { month: "short" })
-                  .toUpperCase();
-                const label = `${day} ${month}`;
-                return (
-                  <TransactionRow
-                    key={rowKey}
-                    tx={tx}
-                    index={index}
-                    metaVariant="date"
-                    metaLabelOverride={label}
-                    metaLabelClassName="kk-label text-[var(--kk-ember)]"
-                    hasEdit={hasEdit}
-                    onEdit={hasEdit ? handleEdit : undefined}
-                    onDelete={handleDelete}
-                    onOpenMobileSheet={openMobileSheet}
-                    formatCurrency={formatCurrency}
-                    amountMaxWidthClass="max-w-[24vw]"
-                    isProcessing={processing}
-                    showActions={!processing}
-                  />
-                );
-              })}
-            </AnimatePresence>
-          )}
+          <AnimatePresence mode="popLayout">
+            {recentTransactions.map((tx, index) => {
+              const processing = isProcessingRow(tx);
+              const rowKey = tx.id || `recent-${index}`;
+              return (
+                <TransactionRow
+                  key={rowKey}
+                  tx={tx}
+                  index={index}
+                  metaVariant="date"
+                  isMobile={isMobile}
+                  hasEdit={hasEdit}
+                  onEdit={hasEdit ? handleEdit : undefined}
+                  onDelete={handleDelete}
+                  onOpenMobileSheet={openMobileSheet}
+                  formatCurrency={formatCurrency}
+                  amountMaxWidthClass="max-w-[24vw]"
+                  isProcessing={processing}
+                />
+              );
+            })}
+          </AnimatePresence>
         </div>
       </motion.div>
 
@@ -949,12 +907,8 @@ export const TransactionList = React.memo(({
         onClose={closeMobileSheet}
         onEdit={hasEdit ? handleEdit : undefined}
         onDelete={handleDelete}
-        onTogglePrivate={handleTogglePrivate}
-        isShared={isMobileSheetShared}
         formatCurrency={formatCurrency}
       />
     </div>
   );
-});
-
-TransactionList.displayName = "TransactionList";
+};

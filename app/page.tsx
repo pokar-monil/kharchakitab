@@ -1,31 +1,20 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { AppProvider, useAppContext } from "@/src/context/AppContext";
-import { SignalingProvider, useSignaling } from "@/src/context/SignalingContext";
-import { BottomTabBar, type TabType } from "@/src/components/BottomTabBar";
+import { MicButton } from "@/src/components/MicButton";
 import { EditModal } from "@/src/components/EditModal";
 import { TransactionList } from "@/src/components/TransactionList";
 import { HistoryView } from "@/src/components/HistoryView";
 import { RecordingStatus } from "@/src/components/RecordingStatus";
-import { HouseholdView } from "@/src/components/HouseholdView";
-import { RecurringView } from "@/src/components/RecurringView";
-import { RecurringEditModal } from "@/src/components/RecurringEditModal";
 import { useAudioRecorder } from "@/src/hooks/useAudioRecorder";
 import { parseWithGeminiFlash } from "@/src/services/gemini";
 import { parseReceiptWithGemini } from "@/src/services/receipt";
 import { transcribeAudio } from "@/src/services/sarvam";
-import {
-  addTransaction,
-  getDeviceIdentity,
-  updateTransaction,
-  isTransactionShared,
-  getRecurringTemplates,
-} from "@/src/db/db";
-import type { RecurringTemplate } from "@/src/config/recurring";
+import { addTransaction, deleteTransaction, updateTransaction } from "@/src/db/db";
 import type { Expense } from "@/src/utils/schemas";
-import type { Transaction, Recurring_template } from "@/src/types";
+import type { Transaction } from "@/src/types";
 import { AlertCircle, PenLine, ImageUp } from "lucide-react";
 import { prepareReceiptImage } from "@/src/utils/imageProcessing";
 import {
@@ -34,13 +23,6 @@ import {
   MIN_AUDIO_SIZE_BYTES,
 } from "@/src/config/mic";
 import { ERROR_MESSAGES, toUserMessage } from "@/src/utils/error";
-import posthog from "posthog-js";
-import {
-  getAlertsEnabled,
-  getAlertsEnvironment,
-  isAlertsReady,
-  syncAlertsQueue,
-} from "@/src/services/pwaAlerts";
 
 type TransactionInput = Omit<Transaction, "id">;
 
@@ -54,7 +36,6 @@ const buildTransaction = (
   category: data.category,
   paymentMethod: data.paymentMethod,
   timestamp: data.timestamp,
-  is_private: data.is_private ?? false,
 });
 
 const formatDateYMD = (value: Date) => {
@@ -95,24 +76,13 @@ const dataUrlToBlob = (dataUrl: string): Blob => {
   return new Blob([bytes], { type: mimeType });
 };
 
-// Module-scope animation objects — prevents framer-motion from restarting on re-render
-const orbEmberAnimate = { scale: [1, 1.1, 1], opacity: [0.4, 0.5, 0.4] };
-const orbEmberTransition = { duration: 8, repeat: Infinity, ease: "easeInOut" } as const;
-const orbSaffronAnimate = { scale: [1, 1.15, 1], opacity: [0.3, 0.4, 0.3] };
-const orbSaffronTransition = { duration: 10, repeat: Infinity, ease: "easeInOut", delay: 2 } as const;
-const headerInitial = { opacity: 0, y: -8 };
-const headerAnimate = { opacity: 1, y: 0 };
-const headerTransition = { duration: 0.4 };
-const headerTransitionDelay = { duration: 0.4, delay: 0.1 };
-
 const AppShell = () => {
-  const { isRecording, setIsRecording, activeTab, setActiveTab, setIncomingPair } = useAppContext();
-  // Initialize presence at app level for discoverability
-  const { isConnected, error } = useSignaling();
+  const { isRecording, setIsRecording } = useAppContext();
   const [refreshKey, setRefreshKey] = useState(0);
   const [deletedTx, setDeletedTx] = useState<Transaction | null>(null);
   const [editedTx, setEditedTx] = useState<Transaction | null>(null);
   const [addedTx, setAddedTx] = useState<Transaction | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
   const [editState, setEditState] = useState<{
     mode: "new" | "edit";
     id?: string;
@@ -121,139 +91,14 @@ const AppShell = () => {
     category: string;
     paymentMethod?: "cash" | "upi" | "card" | "unknown";
     timestamp?: number;
-    isPrivate?: boolean;
-    isShared?: boolean;
   } | null>(null);
-  const isEditing = editState !== null;
   const [lastError, setLastError] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [pendingTransactions, setPendingTransactions] = useState<Transaction[]>([]);
   const [lastAudioBlob, setLastAudioBlob] = useState<Blob | null>(null);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isTxnSheetOpen, setIsTxnSheetOpen] = useState(false);
   const [isAboutVisible, setIsAboutVisible] = useState(false);
   const [isReceiptProcessing, setIsReceiptProcessing] = useState(false);
-  const [activeSection, setActiveSection] = useState<TabType>("summary");
-  const [recurringModalState, setRecurringModalState] = useState<{
-    mode: "new" | "edit";
-    template: RecurringTemplate | null;
-    recurringTemplate: Recurring_template | null;
-    reactivatePreset: boolean;
-  } | null>(null);
-  const isRecurringModalOpen = recurringModalState !== null;
-  // Show by default on localhost, or if PostHog is not enabled
-  const [showHousehold, setShowHousehold] = useState(false);
-  // Stable fallback timestamp for EditModal — only updates when editState changes
-  const editTimestampFallback = useMemo(() => Date.now(), [editState]);
-
-  const { client } = useSignaling();
-  const identityRef = useRef<any>(null);
-
-  useEffect(() => {
-    void (async () => {
-      const device = await getDeviceIdentity();
-      identityRef.current = device;
-    })();
-  }, []);
-
-  useEffect(() => {
-    const syncAlertsIfReady = async () => {
-      const enabled = getAlertsEnabled();
-      const env = getAlertsEnvironment();
-      if (!isAlertsReady(enabled, env)) return;
-      const templates = await getRecurringTemplates();
-      await syncAlertsQueue(templates);
-    };
-
-    void syncAlertsIfReady();
-
-    const handleVisibility = () => {
-      if (document.visibilityState === "visible") {
-        void syncAlertsIfReady();
-      }
-    };
-
-    document.addEventListener("visibilitychange", handleVisibility);
-    return () => {
-      document.removeEventListener("visibilitychange", handleVisibility);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!client) return;
-
-    const offReq = client.on("pairing:request", (payload) => {
-
-
-      if (!payload || payload.to_device_id !== identityRef.current?.device_id) {
-
-        return;
-      }
-
-
-
-      // Capture the request in global state
-      setIncomingPair({
-        session_id: payload.session_id,
-        from_device_id: payload.from_device_id,
-        from_display_name: payload.from_display_name,
-      });
-
-      // Auto-switch to Household tab ONLY if the feature is enabled
-      setTimeout(() => {
-        if (showHousehold) {
-
-          setActiveTab("household");
-        } else {
-
-        }
-      }, 300);
-    });
-
-    const offCancel = client.on("pairing:cancel", (payload) => {
-
-      // We don't have access to current incomingPair here without a ref, 
-      // but we can just call a function that checks it or rely on HouseholdView 
-      // once it's mounted. For now, let's at least clear it if it exists.
-      setIncomingPair(null);
-    });
-
-    return () => {
-      offReq();
-      offCancel();
-    };
-  }, [client, setActiveTab, setIncomingPair, showHousehold]);
-
-  useEffect(() => {
-    const host = window.location.hostname;
-    const isLocal = host === "localhost" || host === "127.0.0.1" || host === "::1";
-    if (isLocal) {
-      // Ignore the feature flag locally so household view is always visible.
-      setShowHousehold(true);
-      return;
-    }
-
-    // Always check for feature flags if PostHog initialized
-    posthog.onFeatureFlags(() => {
-      // Use !! to force undefined/null to false
-      const isEnabled = !!posthog.isFeatureEnabled("household-view");
-      setShowHousehold(isEnabled);
-    });
-  }, []);
-
-  useEffect(() => {
-    // Force back to personal if currently on household and disabled
-    if (!showHousehold && activeTab === "household") {
-
-      setActiveTab("personal");
-    }
-  }, [showHousehold, activeTab, setActiveTab]);
-
-  useEffect(() => {
-    if (activeTab !== "personal") {
-      setActiveSection("summary");
-    }
-  }, [activeTab]);
   const processedBlobRef = useRef<Blob | null>(null);
   const processingRef = useRef(false);
   const receiptProcessingRef = useRef(false);
@@ -264,14 +109,6 @@ const AppShell = () => {
     const stored = window.localStorage.getItem("kk_about_visible");
     setIsAboutVisible(stored !== "false");
   }, []);
-  useEffect(() => {
-    void getDeviceIdentity();
-  }, []);
-  useEffect(() => {
-    if (activeSection !== "summary") {
-      setIsTxnSheetOpen(false);
-    }
-  }, [activeSection]);
   useEffect(() => {
     setIsRecording(audioRecorder.isRecording);
     if (audioRecorder.isRecording) {
@@ -332,40 +169,6 @@ const AppShell = () => {
     setRefreshKey((prev) => prev + 1);
   }, []);
 
-  const handleAddRecurring = useCallback((template?: RecurringTemplate) => {
-    setRecurringModalState({
-      mode: "new",
-      template: template ?? null,
-      recurringTemplate: null,
-      reactivatePreset: false,
-    });
-  }, []);
-
-  const handleEditRecurring = useCallback((template: Recurring_template) => {
-    setRecurringModalState({
-      mode: "edit",
-      template: null,
-      recurringTemplate: template,
-      reactivatePreset: false,
-    });
-  }, []);
-
-  const handleReactivateRecurring = useCallback((template: Recurring_template) => {
-    setRecurringModalState({
-      mode: "edit",
-      template: null,
-      recurringTemplate: template,
-      reactivatePreset: true,
-    });
-  }, []);
-
-  const handleCloseRecurringModal = useCallback(() => {
-    setRecurringModalState(null);
-  }, []);
-
-  const handleSaveRecurring = useCallback(() => {
-    refreshTransactions();
-  }, [refreshTransactions]);
   const startProcessing = () => {
     if (processingRef.current) return false;
     processingRef.current = true;
@@ -390,22 +193,22 @@ const AppShell = () => {
     receiptProcessingRef.current = false;
   };
 
-  const addPendingTransaction = (label: string) => {
-    const pending: Transaction = {
-      id: `pending-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  const addPendingTransaction = async () => {
+    const tempId = await addTransaction({
+      id: "",
       amount: 0,
-      item: label,
+      item: "Processing…",
       category: "Other",
       paymentMethod: "unknown",
       timestamp: Date.now(),
-      is_private: false,
-    };
-    setPendingTransactions((prev) => [pending, ...prev]);
-    return pending.id;
+    });
+    refreshTransactions();
+    return tempId;
   };
 
-  const removePendingTransaction = (id: string) => {
-    setPendingTransactions((prev) => prev.filter((tx) => tx.id !== id));
+  const removePendingTransaction = async (tempId: string) => {
+    await deleteTransaction(tempId);
+    refreshTransactions();
   };
 
   const parseTranscript = async (text: string) => {
@@ -428,7 +231,6 @@ const AppShell = () => {
 
   const handleStartRecording = useCallback(async () => {
     setLastError(null); // Clear any previous errors
-    posthog.capture("recording_started");
     await audioRecorder.startRecording();
   }, [audioRecorder]);
 
@@ -447,45 +249,44 @@ const AppShell = () => {
     // Prevent duplicate processing (race condition)
     if (!startProcessing()) return;
     setLastError(null);
-    const pendingId = addPendingTransaction("Processing…");
+    const tempId = await addPendingTransaction();
     try {
       const text = await transcribeAudio(audioBlob);
       const normalized = text.trim().toLowerCase();
       if (DISMISS_TRANSCRIPTS.has(normalized)) {
+        await removePendingTransaction(tempId);
         stopProcessing();
         return;
       }
       const expense = await parseTranscript(text || "Auto 50");
       const now = Date.now();
       if (expense.amount <= 0) {
+        await removePendingTransaction(tempId);
         setLastError(ERROR_MESSAGES.amountGreaterThanZero);
         stopProcessing();
         return;
       }
-      const transaction: Transaction = {
-        id: "",
+      const updatedTx: Transaction = {
+        id: tempId,
         amount: expense.amount,
         item: expense.item,
         category: expense.category,
         paymentMethod: expense.paymentMethod ?? "cash",
         timestamp: toTimestamp(expense.date, now),
       };
-      const id = await addTransaction(transaction);
-      setAddedTx({ ...transaction, id });
-      refreshTransactions();
-      posthog.capture("transaction_added", {
+      await updateTransaction(tempId, {
         amount: expense.amount,
+        item: expense.item,
         category: expense.category,
-        payment_method: expense.paymentMethod ?? "cash",
+        paymentMethod: expense.paymentMethod ?? "cash",
+        timestamp: toTimestamp(expense.date, now),
       });
+      setEditedTx(updatedTx);
+      refreshTransactions();
     } catch (error) {
+      await removePendingTransaction(tempId);
       setLastError(toUserMessage(error, "unableToTranscribeAudio"));
-      posthog.capture("error_occurred", {
-        error_type: "transcription_failed",
-        error_message: toUserMessage(error, "unableToTranscribeAudio"),
-      });
     } finally {
-      removePendingTransaction(pendingId);
       stopProcessing();
     }
   };
@@ -493,8 +294,17 @@ const AppShell = () => {
   const processReceiptDataUrl = async (dataUrl: string) => {
     if (!startReceiptProcessing()) return;
     setLastError(null);
-    const pendingId = addPendingTransaction("Processing receipt...");
+    const tempId = await addTransaction({
+      id: "",
+      amount: 0,
+      item: "Processing receipt...",
+      category: "Other",
+      paymentMethod: "unknown",
+      timestamp: Date.now(),
+    });
+    refreshTransactions();
     try {
+      const prefix = dataUrl.slice(0, 64);
       const blob = dataUrlToBlob(dataUrl);
       const normalized = await prepareReceiptImage(blob);
       const expense = await parseReceiptWithGemini(normalized);
@@ -502,35 +312,27 @@ const AppShell = () => {
       if (expense.amount <= 0) {
         throw new Error(ERROR_MESSAGES.amountGreaterThanZero);
       }
-      const transaction: Transaction = {
-        id: "",
+      const updatedTx: Transaction = {
+        id: tempId,
         amount: expense.amount,
         item: expense.item,
         category: expense.category,
         paymentMethod: expense.paymentMethod ?? "cash",
         timestamp: toTimestamp(expense.date, now),
       };
-      const id = await addTransaction(transaction);
-      setAddedTx({ ...transaction, id });
+      await updateTransaction(tempId, {
+        amount: expense.amount,
+        item: expense.item,
+        category: expense.category,
+        paymentMethod: expense.paymentMethod ?? "cash",
+        timestamp: toTimestamp(expense.date, now),
+      });
+      setEditedTx(updatedTx);
       refreshTransactions();
-      posthog.capture("receipt_processed", {
-        amount: expense.amount,
-        category: expense.category,
-        payment_method: expense.paymentMethod ?? "cash",
-      });
-      posthog.capture("transaction_added", {
-        amount: expense.amount,
-        category: expense.category,
-        payment_method: expense.paymentMethod ?? "cash",
-      });
     } catch (error) {
+      await removePendingTransaction(tempId);
       setLastError(toUserMessage(error, "unableToProcessReceipt"));
-      posthog.capture("error_occurred", {
-        error_type: "receipt_processing_failed",
-        error_message: toUserMessage(error, "unableToProcessReceipt"),
-      });
     } finally {
-      removePendingTransaction(pendingId);
       stopReceiptProcessing();
     }
   };
@@ -540,10 +342,6 @@ const AppShell = () => {
   ) => {
     const file = event.target.files?.[0];
     if (!file) return;
-    posthog.capture("receipt_upload_started", {
-      file_type: file.type,
-      file_size_bytes: file.size,
-    });
     try {
       const dataUrl = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
@@ -559,34 +357,18 @@ const AppShell = () => {
       await processReceiptDataUrl(dataUrl);
     } catch (error) {
       setLastError(toUserMessage(error, "unableToReadReceiptImage"));
-      posthog.capture("error_occurred", {
-        error_type: "receipt_read_failed",
-        error_message: toUserMessage(error, "unableToReadReceiptImage"),
-      });
     }
   };
 
   const handleStopRecording = useCallback(async () => {
     const { audioBlob, duration } = await audioRecorder.stopRecording();
-    posthog.capture("recording_stopped", {
-      duration_ms: duration,
-      blob_size_bytes: audioBlob?.size ?? 0,
-    });
     const validationError = getAudioValidationError(audioBlob, duration);
     if (validationError) {
       setLastError(validationError);
-      posthog.capture("error_occurred", {
-        error_type: "recording_validation",
-        error_message: validationError,
-      });
       return;
     }
     if (!audioBlob) {
       setLastError(ERROR_MESSAGES.noAudioCaptured);
-      posthog.capture("error_occurred", {
-        error_type: "no_audio_captured",
-        error_message: ERROR_MESSAGES.noAudioCaptured,
-      });
       return;
     }
     processedBlobRef.current = audioBlob;
@@ -594,31 +376,13 @@ const AppShell = () => {
     await processAudioBlob(audioBlob);
   }, [audioRecorder]);
 
-  const onMicPress = useCallback(() => {
-    if (isRecording) {
-      void handleStopRecording();
-    } else {
-      void handleStartRecording();
-    }
-  }, [isRecording, handleStopRecording, handleStartRecording]);
+  const todayLabel = new Date().toLocaleDateString("en-IN", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+  });
 
-  const onReceiptUploadClick = useCallback(() => {
-    receiptInputRef.current?.click();
-  }, []);
-
-  const [todayLabel, setTodayLabel] = useState("");
-
-  useEffect(() => {
-    const label = new Date().toLocaleDateString("en-IN", {
-      weekday: "short",
-      day: "numeric",
-      month: "short",
-    });
-    setTodayLabel(label);
-  }, []);
-
-  const openEdit = useCallback(async (tx: Transaction) => {
-    const isShared = await isTransactionShared(tx.id);
+  const openEdit = useCallback((tx: Transaction) => {
     setEditState({
       mode: "edit",
       id: tx.id,
@@ -627,30 +391,24 @@ const AppShell = () => {
       category: tx.category,
       paymentMethod: tx.paymentMethod,
       timestamp: tx.timestamp,
-      isPrivate: tx.is_private ?? false,
-      isShared,
     });
+    setIsEditing(true);
   }, []);
 
   const handleOpenHistory = useCallback(() => {
     setIsHistoryOpen(true);
-    posthog.capture("history_viewed");
   }, []);
 
   const handleTransactionDeleted = useCallback(
     (tx: Transaction) => {
       setDeletedTx(tx);
       refreshTransactions();
-      posthog.capture("transaction_deleted", {
-        amount: tx.amount,
-        category: tx.category,
-        payment_method: tx.paymentMethod,
-      });
     },
     [refreshTransactions]
   );
 
   const handleCloseEdit = useCallback(() => {
+    setIsEditing(false);
     setEditState(null);
   }, []);
 
@@ -661,41 +419,22 @@ const AppShell = () => {
       category: string;
       paymentMethod: "cash" | "upi" | "card" | "unknown";
       timestamp: number;
-      isPrivate?: boolean;
     }) => {
       if (data.amount <= 0) {
         setLastError(ERROR_MESSAGES.amountGreaterThanZero);
         return;
       }
       if (editState?.mode === "edit" && editState.id) {
-        const updated = buildTransaction(
-          {
-            ...data,
-            is_private: data.isPrivate ?? false,
-          },
-          editState.id
-        );
+        const updated = buildTransaction(data, editState.id);
         await updateTransaction(editState.id, updated);
         setEditedTx(updated);
-        posthog.capture("transaction_edited", {
-          amount: data.amount,
-          category: data.category,
-          payment_method: data.paymentMethod,
-        });
       } else {
-        const transaction = buildTransaction({
-          ...data,
-          is_private: data.isPrivate ?? false,
-        });
+        const transaction = buildTransaction(data);
         const id = await addTransaction(transaction);
         setAddedTx({ ...transaction, id });
-        posthog.capture("transaction_added", {
-          amount: data.amount,
-          category: data.category,
-          payment_method: data.paymentMethod,
-        });
       }
       setRefreshKey((prev) => prev + 1);
+      setIsEditing(false);
       setEditState(null);
     },
     [editState]
@@ -719,13 +458,19 @@ const AppShell = () => {
       >
         <motion.div
           className="kk-gradient-orb kk-gradient-orb-ember absolute -right-32 top-20 h-96 w-96"
-          animate={orbEmberAnimate}
-          transition={orbEmberTransition}
+          animate={{
+            scale: [1, 1.1, 1],
+            opacity: [0.4, 0.5, 0.4],
+          }}
+          transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }}
         />
         <motion.div
           className="kk-gradient-orb kk-gradient-orb-saffron absolute -left-20 top-1/3 h-80 w-80"
-          animate={orbSaffronAnimate}
-          transition={orbSaffronTransition}
+          animate={{
+            scale: [1, 1.15, 1],
+            opacity: [0.3, 0.4, 0.3],
+          }}
+          transition={{ duration: 10, repeat: Infinity, ease: "easeInOut", delay: 2 }}
         />
         <div className="kk-gradient-orb kk-gradient-orb-ink absolute bottom-20 left-1/2 h-[500px] w-[500px] -translate-x-1/2" />
       </div>
@@ -737,50 +482,42 @@ const AppShell = () => {
             <div aria-hidden />
             <div className="min-w-0 text-center">
               <motion.div
-                initial={headerInitial}
-                animate={headerAnimate}
-                transition={headerTransition}
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.4 }}
                 className="kk-label"
               >
                 {todayLabel}
               </motion.div>
               <motion.h1
-                initial={headerInitial}
-                animate={headerAnimate}
-                transition={headerTransitionDelay}
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.4, delay: 0.1 }}
                 className="mt-0.5 text-2xl font-bold font-[family:var(--font-display)] tracking-tight"
               >
                 Kharcha<span className="text-[var(--kk-ember)]">Kitab</span>
               </motion.h1>
             </div>
-            <div className="justify-self-end" />
+            <div className="justify-self-end">
+              <button
+                type="button"
+                onClick={() => receiptInputRef.current?.click()}
+                disabled={isReceiptProcessing}
+                aria-label="Upload receipt"
+                title="Upload receipt"
+                className="kk-icon-btn kk-icon-btn-ghost text-[var(--kk-ember)]"
+              >
+                <ImageUp className="h-4 w-4" />
+              </button>
+            </div>
+
           </div>
         </div>
       </header>
 
       {/* Main Content */}
-      <main className="relative z-10 mx-auto max-w-4xl px-4 pb-28 pt-6 sm:px-6">
-        {showHousehold && (
-          <div className="mb-6 flex items-center justify-center">
-            <div className="flex rounded-full border border-[var(--kk-smoke)] bg-white/70 p-1 shadow-[var(--kk-shadow-sm)]">
-              {(["personal", "household"] as const).map((tab) => (
-                <button
-                  key={tab}
-                  type="button"
-                  onClick={() => setActiveTab(tab)}
-                  className={`rounded-full px-4 py-1.5 text-sm font-medium transition ${activeTab === tab
-                    ? "bg-[var(--kk-ember)] text-white"
-                    : "text-[var(--kk-ink)] hover:bg-[var(--kk-cream)]"
-                    }`}
-                >
-                  {tab === "personal" ? "Personal" : "Household"}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {activeTab === "personal" && isAboutVisible && (
+      <main className="relative z-10 mx-auto max-w-4xl px-4 pb-24 pt-6 sm:px-6">
+        {isAboutVisible && (
           <section className="mb-6 kk-card px-5 py-4">
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0 flex-1">
@@ -793,10 +530,7 @@ const AppShell = () => {
                 type="button"
                 onClick={() => {
                   setIsAboutVisible(false);
-                  if (typeof window !== "undefined") {
-                    window.localStorage.setItem("kk_about_visible", "false");
-                  }
-                  posthog.capture("about_dismissed");
+                  window.localStorage.setItem("kk_about_visible", "false");
                 }}
                 className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--kk-cream)] text-[var(--kk-ash)] transition hover:bg-[var(--kk-smoke-heavy)] hover:text-[var(--kk-ink)]"
                 aria-label="Dismiss about card"
@@ -828,102 +562,77 @@ const AppShell = () => {
             </div>
           </section>
         )}
-        {activeTab === "personal" ? (
-          <>
-            {activeSection === "summary" && (
-              <>
-                {/* Error Banner */}
-                <AnimatePresence>
-                  {lastError && (
-                    <motion.div
-                      initial={{ opacity: 0, y: -12 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: -12 }}
-                      transition={{ duration: 0.24 }}
-                      className="mb-5 overflow-hidden rounded-[var(--kk-radius-lg)] border border-[rgba(229,72,77,0.24)] bg-[rgba(229,72,77,0.06)] px-4 py-3 shadow-[var(--kk-shadow-sm)]"
+        {/* Error Banner */}
+        <AnimatePresence>
+          {lastError && (
+            <motion.div
+              initial={{ opacity: 0, y: -12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -12 }}
+              transition={{ duration: 0.24 }}
+              className="mb-5 overflow-hidden rounded-[var(--kk-radius-lg)] border border-[rgba(229,72,77,0.24)] bg-[rgba(229,72,77,0.06)] px-4 py-3 shadow-[var(--kk-shadow-sm)]"
+            >
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full border border-[rgba(229,72,77,0.25)] bg-white text-[var(--kk-danger-ink)]">
+                  <AlertCircle className="h-4 w-4" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-start gap-2">
+                    <div className="flex-1 min-w-0 text-sm font-semibold text-[var(--kk-danger-ink)]">
+                      {lastError}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setLastError(null);
+                        setEditState({
+                          mode: "new",
+                          amount: 0,
+                          item: "",
+                          category: "Food",
+                        });
+                        setIsEditing(true);
+                      }}
+                      className="kk-btn-secondary kk-btn-compact"
                     >
-                      <div className="flex items-start gap-3">
-                        <div className="mt-0.5 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full border border-[rgba(229,72,77,0.25)] bg-white text-[var(--kk-danger-ink)]">
-                          <AlertCircle className="h-4 w-4" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-start gap-2">
-                            <div className="flex-1 min-w-0 text-sm font-semibold text-[var(--kk-danger-ink)]">
-                              {lastError}
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setLastError(null);
-                                setEditState({
-                                  mode: "new",
-                                  amount: 0,
-                                  item: "",
-                                  category: "Food",
-                                });
-                                posthog.capture("manual_entry_opened");
-                              }}
-                              className="kk-btn-secondary kk-btn-compact"
-                            >
-                              <PenLine className="h-3 w-3" />
-                              Enter manually
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
+                      <PenLine className="h-3 w-3" />
+                      Enter manually
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
-                {/* Recording/Processing Status */}
-                <RecordingStatus
-                  isRecording={isRecording}
-                  isProcessing={isProcessing}
-                  isReceiptProcessing={isReceiptProcessing}
-                />
+        {/* Recording/Processing Status */}
+        <RecordingStatus
+          isRecording={isRecording}
+          isProcessing={isProcessing}
+          isReceiptProcessing={isReceiptProcessing}
+        />
 
-                {/* Transaction List */}
-                <section>
-                  <TransactionList
-                    refreshKey={refreshKey}
-                    addedTx={addedTx}
-                    deletedTx={deletedTx}
-                    editedTx={editedTx}
-                    pendingTransactions={pendingTransactions}
-                    onViewAll={handleOpenHistory}
-                    onEdit={openEdit}
-                    onMobileSheetChange={setIsTxnSheetOpen}
-                    onDeleted={handleTransactionDeleted}
-                    onReceiptUploadClick={onReceiptUploadClick}
-                    isReceiptProcessing={isReceiptProcessing}
-                  />
-                </section>
-              </>
-            )}
-            {activeSection === "recurring" && (
-              <section>
-                <RecurringView
-                  refreshKey={refreshKey}
-                  onAddRecurring={handleAddRecurring}
-                  onEditRecurring={handleEditRecurring}
-                  onReactivateRecurring={handleReactivateRecurring}
-                  onMobileSheetChange={setIsTxnSheetOpen}
-                />
-              </section>
-            )}
-          </>
-        ) : showHousehold ? (
-          <HouseholdView />
-        ) : null}
+        {/* Transaction List */}
+        <section>
+          <TransactionList
+            refreshKey={refreshKey}
+            addedTx={addedTx}
+            deletedTx={deletedTx}
+            editedTx={editedTx}
+            onViewAll={handleOpenHistory}
+            onEdit={openEdit}
+            onMobileSheetChange={setIsTxnSheetOpen}
+            onDeleted={handleTransactionDeleted}
+          />
+        </section>
       </main>
 
-      {/* Bottom Tab Bar */}
-      {!isTxnSheetOpen && activeTab === "personal" && (
-        <BottomTabBar
-          activeTab={activeSection}
-          onTabChange={setActiveSection}
+      {/* Mic Button */}
+      {!isTxnSheetOpen && (
+        <MicButton
           isRecording={isRecording}
-          onMicPress={onMicPress}
+          startRecording={handleStartRecording}
+          stopRecording={handleStopRecording}
         />
       )}
       <input
@@ -934,48 +643,28 @@ const AppShell = () => {
         onChange={handleReceiptUpload}
       />
 
-      {/* Edit Modal — conditionally mounted */}
-      {isEditing && (
-        <EditModal
-          isOpen={isEditing}
-          mode={editState?.mode}
-          amount={editState?.amount ?? 0}
-          item={editState?.item ?? ""}
-          category={editState?.category ?? "Food"}
-          paymentMethod={editState?.paymentMethod ?? "cash"}
-          timestamp={editState?.timestamp ?? editTimestampFallback}
-          isPrivate={editState?.isPrivate ?? false}
-          isShared={editState?.isShared ?? false}
-          showHousehold={showHousehold}
-          onClose={handleCloseEdit}
-          onSave={handleSaveEdit}
-        />
-      )}
+      {/* Edit Modal */}
+      <EditModal
+        isOpen={isEditing}
+        mode={editState?.mode}
+        amount={editState?.amount ?? 0}
+        item={editState?.item ?? ""}
+        category={editState?.category ?? "Food"}
+        paymentMethod={editState?.paymentMethod ?? "cash"}
+        timestamp={editState?.timestamp ?? Date.now()}
+        onClose={handleCloseEdit}
+        onSave={handleSaveEdit}
+      />
 
-      {/* Recurring Edit Modal — conditionally mounted */}
-      {isRecurringModalOpen && (
-        <RecurringEditModal
-          isOpen={isRecurringModalOpen}
-          mode={recurringModalState.mode}
-          template={recurringModalState.template}
-          recurringTemplate={recurringModalState.recurringTemplate}
-          reactivatePreset={recurringModalState.reactivatePreset}
-          onClose={handleCloseRecurringModal}
-          onSave={handleSaveRecurring}
-        />
-      )}
-
-      {/* History View — conditionally mounted */}
-      {isHistoryOpen && (
-        <HistoryView
-          isOpen={isHistoryOpen}
-          onClose={handleCloseHistory}
-          onDeleted={handleHistoryDeleted}
-          refreshKey={refreshKey}
-          editedTx={editedTx}
-          onEdit={openEdit}
-        />
-      )}
+      {/* History View */}
+      <HistoryView
+        isOpen={isHistoryOpen}
+        onClose={handleCloseHistory}
+        onDeleted={handleHistoryDeleted}
+        refreshKey={refreshKey}
+        editedTx={editedTx}
+        onEdit={openEdit}
+      />
     </div>
   );
 };
@@ -983,10 +672,7 @@ const AppShell = () => {
 export default function Home() {
   return (
     <AppProvider>
-      <SignalingProvider>
-        <AppShell />
-      </SignalingProvider>
+      <AppShell />
     </AppProvider>
   );
 }
-

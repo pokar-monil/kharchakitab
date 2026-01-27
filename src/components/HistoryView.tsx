@@ -2,33 +2,25 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Search, ChevronLeft } from "lucide-react";
+import {
+  Search,
+  ChevronLeft,
+  Calendar,
+  ArrowRight,
+  Download,
+} from "lucide-react";
 import {
   deleteTransaction,
-  fetchTransactions,
-  updateTransaction,
-  isTransactionShared,
-  getDeviceIdentity,
+  getTransactionsInRange,
 } from "@/src/db/db";
 import type { Transaction } from "@/src/types";
 import { useEscapeKey } from "@/src/hooks/useEscapeKey";
 import { EmptyState } from "@/src/components/EmptyState";
-import { FilterKey, getRangeForFilter, toDateInputValue } from "@/src/utils/dates";
+import { getTodayRange } from "@/src/utils/dates";
 import { TransactionRow } from "@/src/components/TransactionRow";
 import { TransactionActionSheet } from "@/src/components/TransactionActionSheet";
-import { formatCurrency as formatCurrencyUtil } from "@/src/utils/money";
-import { useMobileSheet } from "@/src/hooks/useMobileSheet";
-import { useSummaryViewSync } from "@/src/hooks/useSummaryViewSync";
-import { HistoryFilters } from "@/src/components/HistoryFilters";
-import {
-  MetricsDashboard,
-  type ChartMeta,
-  type DonutSegment,
-} from "@/src/components/MetricsDashboard";
-import posthog from "posthog-js";
 
-const HISTORY_PAGE_SIZE = 30;
-
+type FilterKey = "today" | "week" | "month" | "custom";
 type SummaryView = "today" | "week" | "month";
 
 interface HistoryViewProps {
@@ -40,20 +32,297 @@ interface HistoryViewProps {
   refreshKey?: number;
 }
 
+const PAGE_SIZE = 30;
+const SUMMARY_VIEW_KEY = "kk_summary_view";
+const SUMMARY_VIEW_EVENT = "kk-summary-view-change";
+
+const isSummaryView = (value: string | null): value is SummaryView =>
+  value === "today" || value === "week" || value === "month";
+
 const mapFilterToSummaryView = (value: FilterKey): SummaryView =>
   value === "custom" ? "month" : value;
 
-
-const getInitialFilter = (): FilterKey => {
-  if (typeof window === "undefined") return "month";
-  const stored = window.localStorage.getItem("kk_summary_view");
-  if (stored === "today" || stored === "week" || stored === "month") {
-    return stored;
-  }
-  return "month";
+const syncSummaryView = (value: SummaryView) => {
+  if (typeof window === "undefined") return;
+  const stored = window.localStorage.getItem(SUMMARY_VIEW_KEY);
+  if (stored === value) return;
+  window.localStorage.setItem(SUMMARY_VIEW_KEY, value);
+  window.dispatchEvent(new CustomEvent(SUMMARY_VIEW_EVENT, { detail: value }));
 };
 
-export const HistoryView = React.memo(({
+type ChartMeta = {
+  CHART: {
+    width: number;
+    height: number;
+    padding: { left: number; right: number; top: number; bottom: number };
+  };
+  points: { x: number; y: number; value: number; ts: number }[];
+  linePath: string;
+  areaPath: string;
+  yTicks: number[];
+  xTickIdx: number[];
+  baseLineY: number;
+  prevLineY: number;
+  yMin: number;
+  yMax: number;
+};
+
+interface TrendChartProps {
+  chartMeta: ChartMeta | null;
+  chartReady: boolean;
+  isMetricsLoading: boolean;
+  dayLabels: string[];
+  bucket: "hour" | "day";
+  totalBase: number;
+  totalPrev: number;
+  formatCurrency: (value: number) => string;
+}
+
+const TrendChart = React.memo(
+  ({
+    chartMeta,
+    chartReady,
+    isMetricsLoading,
+    dayLabels,
+    bucket,
+    totalBase,
+    totalPrev,
+    formatCurrency,
+  }: TrendChartProps) => {
+    const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+    const chartRef = useRef<HTMLDivElement | null>(null);
+
+    const labelPositions = useMemo(() => {
+      if (!chartMeta) return null;
+      const baseLabelY = chartMeta.baseLineY - 6;
+      const prevLabelY = chartMeta.prevLineY - 6;
+      let baseY = baseLabelY;
+      let prevY = prevLabelY;
+      if (totalPrev > 0 && Math.abs(baseLabelY - prevLabelY) < 12) {
+        if (baseLabelY <= prevLabelY) {
+          baseY = baseLabelY - 12;
+          prevY = prevLabelY + 12;
+        } else {
+          baseY = baseLabelY + 12;
+          prevY = prevLabelY - 12;
+        }
+      }
+      const minY = chartMeta.CHART.padding.top + 10;
+      const maxY = chartMeta.CHART.height - 6;
+      const clamp = (value: number) => Math.min(Math.max(value, minY), maxY);
+      return {
+        baseY: clamp(baseY),
+        prevY: clamp(prevY),
+      };
+    }, [chartMeta, totalPrev]);
+
+    useEffect(() => {
+      setHoverIndex(null);
+    }, [chartMeta?.points.length]);
+
+    const updateHover = useCallback(
+      (clientX: number) => {
+        if (!chartMeta || !chartRef.current) return;
+        const rect = chartRef.current.getBoundingClientRect();
+        if (!rect.width) return;
+        const scale = rect.width / chartMeta.CHART.width;
+        const left = chartMeta.CHART.padding.left * scale;
+        const right = chartMeta.CHART.padding.right * scale;
+        const inner = rect.width - left - right;
+        if (inner <= 0) return;
+        const x = Math.min(Math.max(clientX - rect.left - left, 0), inner);
+        const pct = x / inner;
+        const idx = Math.round(pct * (chartMeta.points.length - 1));
+        setHoverIndex((prev) => (prev === idx ? prev : idx));
+      },
+      [chartMeta]
+    );
+
+    if (isMetricsLoading) {
+      return <div className="kk-skeleton h-36 w-full" />;
+    }
+
+    if (!chartReady || !chartMeta) {
+      return (
+        <div className="flex h-24 w-full max-w-[260px] items-center justify-center kk-radius-sm border border-[var(--kk-smoke-heavy)] kk-micro text-[var(--kk-ash)]">
+          —
+        </div>
+      );
+    }
+
+    return (
+      <div
+        ref={chartRef}
+        className="relative w-full"
+        onMouseMove={(event) => updateHover(event.clientX)}
+        onMouseLeave={() => setHoverIndex(null)}
+        onTouchMove={(event) => {
+          if (event.touches[0]) {
+            updateHover(event.touches[0].clientX);
+          }
+        }}
+        onTouchEnd={() => setHoverIndex(null)}
+      >
+        <svg
+          aria-hidden
+          viewBox={`0 0 ${chartMeta.CHART.width} ${chartMeta.CHART.height}`}
+          className="h-40 w-full"
+        >
+          {chartMeta.yTicks.map((tick) => {
+            const y =
+              chartMeta.CHART.padding.top +
+              (1 - (tick - chartMeta.yMin) / (chartMeta.yMax - chartMeta.yMin)) *
+              (chartMeta.CHART.height -
+                chartMeta.CHART.padding.top -
+                chartMeta.CHART.padding.bottom);
+            return (
+              <g key={`grid-${tick}`}>
+                <text
+                  x={chartMeta.CHART.padding.left - 6}
+                  y={y + 4}
+                  textAnchor="end"
+                  className="fill-[var(--kk-ash)] text-[9px]"
+                >
+                  ₹{formatCurrency(tick)}
+                </text>
+              </g>
+            );
+          })}
+          {totalPrev > 0 && (
+            <line
+              x1={chartMeta.CHART.padding.left}
+              x2={chartMeta.CHART.width - chartMeta.CHART.padding.right}
+              y1={chartMeta.prevLineY}
+              y2={chartMeta.prevLineY}
+              stroke="var(--kk-ash)"
+              strokeDasharray="2 6"
+            />
+          )}
+          <line
+            x1={chartMeta.CHART.padding.left}
+            x2={chartMeta.CHART.width - chartMeta.CHART.padding.right}
+            y1={chartMeta.baseLineY}
+            y2={chartMeta.baseLineY}
+            stroke="var(--kk-ember)"
+            strokeDasharray="6 6"
+            strokeLinecap="round"
+            strokeWidth={totalPrev > 0 ? 1 : 1.5}
+            opacity={totalPrev > 0 ? 0.55 : 0.85}
+          />
+          <text
+            x={chartMeta.CHART.width - chartMeta.CHART.padding.right}
+            y={labelPositions?.baseY ?? chartMeta.baseLineY - 6}
+            textAnchor="end"
+            className="fill-[var(--kk-ember)] text-[9px] font-medium"
+            style={{ paintOrder: "stroke", stroke: "white", strokeWidth: 3 }}
+          >
+            Total ₹{formatCurrency(totalBase)}
+          </text>
+          {totalPrev > 0 && (
+            <text
+              x={chartMeta.CHART.width - chartMeta.CHART.padding.right}
+              y={labelPositions?.prevY ?? chartMeta.prevLineY - 6}
+              textAnchor="end"
+              className="fill-[var(--kk-ash)] text-[9px] font-medium"
+              style={{ paintOrder: "stroke", stroke: "white", strokeWidth: 3 }}
+            >
+              Total ₹{formatCurrency(totalPrev)}
+            </text>
+          )}
+          <path
+            d={chartMeta.linePath}
+            fill="none"
+            stroke="var(--kk-ember)"
+            strokeWidth="2"
+          />
+          {hoverIndex !== null && chartMeta.points[hoverIndex] && (
+            <g>
+              <line
+                x1={chartMeta.points[hoverIndex].x}
+                x2={chartMeta.points[hoverIndex].x}
+                y1={chartMeta.CHART.padding.top}
+                y2={
+                  chartMeta.CHART.height - chartMeta.CHART.padding.bottom
+                }
+                stroke="var(--kk-ash)"
+                strokeDasharray="2 4"
+              />
+              <circle
+                cx={chartMeta.points[hoverIndex].x}
+                cy={chartMeta.points[hoverIndex].y}
+                r="3"
+                fill="var(--kk-ember)"
+                stroke="white"
+                strokeWidth="1.5"
+              />
+            </g>
+          )}
+          {chartMeta.xTickIdx.map((idx) => (
+            <text
+              key={`xlabel-${idx}`}
+              x={chartMeta.points[idx]?.x ?? 0}
+              y={chartMeta.CHART.height - 6}
+              textAnchor="middle"
+              className="kk-micro fill-[var(--kk-ash)]"
+            >
+              {dayLabels[idx] ?? ""}
+            </text>
+          ))}
+        </svg>
+        {hoverIndex !== null && chartMeta.points[hoverIndex] && (
+          <div
+            className="pointer-events-none absolute top-2 kk-radius-sm border border-[var(--kk-smoke-heavy)] bg-white/95 px-2 py-1 kk-micro text-[var(--kk-ash)] shadow-[var(--kk-shadow-sm)]"
+            style={{
+              left: `${(chartMeta.points[hoverIndex].x / chartMeta.CHART.width) * 100
+                }%`,
+              transform: "translateX(-50%)",
+            }}
+          >
+            <div className="kk-micro font-semibold text-[var(--kk-ink)]">
+              ₹{formatCurrency(chartMeta.points[hoverIndex].value)}
+            </div>
+            <div>
+              {bucket === "hour"
+                ? new Date(chartMeta.points[hoverIndex].ts).toLocaleTimeString(
+                  "en-IN",
+                  { hour: "2-digit", minute: "2-digit" }
+                )
+                : new Date(chartMeta.points[hoverIndex].ts).toLocaleDateString(
+                  "en-IN",
+                  { day: "numeric", month: "short" }
+                )}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+);
+
+const toInputDate = (value: Date) => {
+  const offset = value.getTimezoneOffset();
+  const local = new Date(value.getTime() - offset * 60000);
+  return local.toISOString().slice(0, 10);
+};
+
+const getWeekStart = (date: Date) => {
+  const start = new Date(date);
+  const day = start.getDay();
+  const diff = (day + 6) % 7;
+  start.setDate(start.getDate() - diff);
+  start.setHours(0, 0, 0, 0);
+  return start;
+};
+
+const getWeekEnd = (date: Date) => {
+  const start = getWeekStart(date);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 6);
+  end.setHours(23, 59, 59, 999);
+  return end;
+};
+
+export const HistoryView = ({
   isOpen,
   onClose,
   onDeleted,
@@ -61,7 +330,7 @@ export const HistoryView = React.memo(({
   editedTx,
   refreshKey,
 }: HistoryViewProps) => {
-  const [filter, setFilter] = useState<FilterKey>(getInitialFilter);
+  const [filter, setFilter] = useState<FilterKey>("month");
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<Transaction[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -69,53 +338,20 @@ export const HistoryView = React.memo(({
   const [cursor, setCursor] = useState<number | undefined>(undefined);
   const [customStart, setCustomStart] = useState("");
   const [customEnd, setCustomEnd] = useState("");
-  const [currentDeviceId, setCurrentDeviceId] = useState<string | null>(null);
+  const customStartRef = useRef<HTMLInputElement | null>(null);
+  const customEndRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const listRequestRef = useRef(0);
   const skipSummarySyncRef = useRef(false);
-  const filterRef = useRef<FilterKey>(filter);
-  useEffect(() => {
-    filterRef.current = filter;
-  }, [filter]);
-  const handleSummaryReceive = useCallback((value: SummaryView) => {
-    setFilter((prev) => {
-      if (prev === value) return prev;
-      skipSummarySyncRef.current = true;
-      return value;
-    });
-  }, []);
-  const { syncSummaryView } = useSummaryViewSync<SummaryView>({
-    enabled: isOpen,
-    listen: false,
-    parse: (value) =>
-      value === "today" || value === "week" || value === "month"
-        ? value
-        : null,
-    onReceive: handleSummaryReceive,
-  });
   const [isExporting, setIsExporting] = useState(false);
   const [isMetricsLoading, setIsMetricsLoading] = useState(false);
   const [metricsVersion, setMetricsVersion] = useState(0);
   const [debouncedQuery, setDebouncedQuery] = useState("");
-  const [debouncedCustomStart, setDebouncedCustomStart] = useState("");
-  const [debouncedCustomEnd, setDebouncedCustomEnd] = useState("");
   const [renderLimit, setRenderLimit] = useState(200);
-  const {
-    isOpen: isMobileSheetOpen,
-    activeId: mobileSheetTxId,
-    confirmDelete: mobileConfirmDelete,
-    setConfirmDelete: setMobileConfirmDelete,
-    openSheet: baseOpenMobileSheet,
-    closeSheet: closeMobileSheet,
-  } = useMobileSheet();
-  const [isMobileSheetShared, setIsMobileSheetShared] = useState(false);
-
-  const openMobileSheet = useCallback(async (id: string) => {
-    const shared = await isTransactionShared(id);
-    setIsMobileSheetShared(shared);
-    baseOpenMobileSheet(id);
-  }, [baseOpenMobileSheet]);
-
+  const [isMobile, setIsMobile] = useState(false);
+  const [mobileSheetTxId, setMobileSheetTxId] = useState<string | null>(null);
+  const [isMobileSheetOpen, setIsMobileSheetOpen] = useState(false);
+  const [mobileConfirmDelete, setMobileConfirmDelete] = useState(false);
   const hasEdit = Boolean(onEdit);
   const metricsCacheRef = useRef(
     new Map<
@@ -140,17 +376,62 @@ export const HistoryView = React.memo(({
   );
 
   useEffect(() => {
-    if (isOpen) return;
-    closeMobileSheet();
-  }, [closeMobileSheet, isOpen]);
-
-  // Get current device ID on mount
-  useEffect(() => {
-    void (async () => {
-      const identity = await getDeviceIdentity();
-      setCurrentDeviceId(identity.device_id);
-    })();
+    if (typeof window === "undefined") return;
+    const mobileQuery = window.matchMedia("(max-width: 639px)");
+    const coarseQuery = window.matchMedia("(pointer: coarse)");
+    const updateIsMobile = () => {
+      setIsMobile(mobileQuery.matches || coarseQuery.matches);
+    };
+    updateIsMobile();
+    const add = (query: MediaQueryList) => {
+      if (query.addEventListener) {
+        query.addEventListener("change", updateIsMobile);
+        return () => query.removeEventListener("change", updateIsMobile);
+      }
+      query.addListener(updateIsMobile);
+      return () => query.removeListener(updateIsMobile);
+    };
+    const cleanupMobile = add(mobileQuery);
+    const cleanupCoarse = add(coarseQuery);
+    return () => {
+      cleanupMobile();
+      cleanupCoarse();
+    };
   }, []);
+
+  useEffect(() => {
+    if (!isMobileSheetOpen) return;
+    const html = document.documentElement;
+    const body = document.body;
+    const prevHtmlOverflow = html.style.overflow;
+    const prevBodyOverflow = body.style.overflow;
+    html.style.overflow = "hidden";
+    body.style.overflow = "hidden";
+    return () => {
+      html.style.overflow = prevHtmlOverflow;
+      body.style.overflow = prevBodyOverflow;
+    };
+  }, [isMobileSheetOpen]);
+
+  useEffect(() => {
+    if (!isMobileSheetOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsMobileSheetOpen(false);
+        setMobileConfirmDelete(false);
+        setMobileSheetTxId(null);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isMobileSheetOpen]);
+
+  useEffect(() => {
+    if (isOpen) return;
+    setIsMobileSheetOpen(false);
+    setMobileConfirmDelete(false);
+    setMobileSheetTxId(null);
+  }, [isOpen]);
 
   const [allocationMode, setAllocationMode] = useState<"amount" | "count">(
     "amount"
@@ -197,39 +478,118 @@ export const HistoryView = React.memo(({
     rangeCount: 0,
   });
 
-  const range = useMemo(
-    () => getRangeForFilter(filter, { customStart: debouncedCustomStart, customEnd: debouncedCustomEnd }),
-    [filter, debouncedCustomStart, debouncedCustomEnd]
-  );
+  const triggerPicker = (ref: React.RefObject<HTMLInputElement | null>) => {
+    const node = ref.current;
+    if (!node) return;
+    const picker = (node as HTMLInputElement & { showPicker?: () => void })
+      .showPicker;
+    if (typeof picker === "function") {
+      picker.call(node);
+    } else {
+      node.focus();
+      node.click();
+    }
+  };
+
+  const range = useMemo(() => {
+    const now = new Date();
+    const start = new Date(now);
+    const end = new Date(now);
+    if (filter === "today") {
+      const today = getTodayRange(now);
+      start.setTime(today.start);
+      end.setTime(today.end);
+    } else if (filter === "week") {
+      const weekStart = getWeekStart(now);
+      start.setTime(weekStart.getTime());
+      end.setTime(getWeekEnd(now).getTime());
+    } else if (filter === "month") {
+      start.setDate(1);
+      start.setHours(0, 0, 0, 0);
+      end.setMonth(end.getMonth() + 1, 0);
+      end.setHours(23, 59, 59, 999);
+    } else if (filter === "custom") {
+      if (!customStart || !customEnd) return null;
+      const startDate = new Date(customStart);
+      const endDate = new Date(customEnd);
+      if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+        return null;
+      }
+      if (startDate.getTime() > endDate.getTime()) {
+        return null;
+      }
+      start.setTime(startDate.getTime());
+      end.setTime(endDate.getTime());
+      start.setHours(0, 0, 0, 0);
+    }
+    if (filter !== "week" && filter !== "month") {
+      end.setHours(23, 59, 59, 999);
+    }
+    return { start: start.getTime(), end: end.getTime() };
+  }, [filter, customStart, customEnd]);
 
   const changeRange = useMemo(() => {
     if (filter === "custom") return range;
-    return getRangeForFilter(filter);
+    const now = new Date();
+    const start = new Date(now);
+    const end = new Date(now);
+    if (filter === "today") {
+      const today = getTodayRange(now);
+      start.setTime(today.start);
+      end.setTime(today.end);
+    } else if (filter === "week") {
+      const weekStart = getWeekStart(now);
+      start.setTime(weekStart.getTime());
+      end.setTime(getWeekEnd(now).getTime());
+    } else if (filter === "month") {
+      start.setDate(1);
+      start.setHours(0, 0, 0, 0);
+      end.setMonth(end.getMonth() + 1, 0);
+      end.setHours(23, 59, 59, 999);
+    }
+    if (filter !== "week" && filter !== "month") {
+      end.setHours(23, 59, 59, 999);
+    }
+    return { start: start.getTime(), end: end.getTime() };
   }, [filter, range]);
 
   useEffect(() => {
     if (filter === "custom") return;
-    const nextRange = getRangeForFilter(filter);
-    if (!nextRange) return;
-    const startVal = toDateInputValue(nextRange.start);
-    const endVal = toDateInputValue(nextRange.end);
-    setCustomStart(startVal);
-    setCustomEnd(endVal);
-    setDebouncedCustomStart(startVal);
-    setDebouncedCustomEnd(endVal);
+    const now = new Date();
+    const start = new Date(now);
+    const end = new Date(now);
+    if (filter === "today") {
+      const today = getTodayRange(now);
+      start.setTime(today.start);
+      end.setTime(today.end);
+    } else if (filter === "week") {
+      const weekStart = getWeekStart(now);
+      start.setTime(weekStart.getTime());
+      end.setTime(getWeekEnd(now).getTime());
+    } else if (filter === "month") {
+      start.setDate(1);
+      start.setHours(0, 0, 0, 0);
+      end.setMonth(end.getMonth() + 1, 0);
+      end.setHours(23, 59, 59, 999);
+    }
+    if (filter !== "week" && filter !== "month") {
+      end.setHours(23, 59, 59, 999);
+    }
+    setCustomStart(toInputDate(start));
+    setCustomEnd(toInputDate(end));
   }, [filter]);
 
   const fetchPage = useCallback(
     (cursorValue?: number) =>
-      range && currentDeviceId
-        ? fetchTransactions({
-          range: { start: range.start, end: range.end },
-          limit: HISTORY_PAGE_SIZE,
-          before: cursorValue,
-          ownerId: currentDeviceId,
-        })
+      range
+        ? getTransactionsInRange(
+          range.start,
+          range.end,
+          PAGE_SIZE,
+          cursorValue
+        )
         : Promise.resolve([] as Transaction[]),
-    [range, currentDeviceId]
+    [range]
   );
 
   const loadFirstPage = useCallback(async () => {
@@ -240,7 +600,7 @@ export const HistoryView = React.memo(({
       const data = await fetchPage();
       if (listRequestRef.current !== requestId) return;
       setItems(data);
-      setHasMore(data.length >= HISTORY_PAGE_SIZE);
+      setHasMore(data.length >= PAGE_SIZE);
       setCursor(data.length ? data[data.length - 1].timestamp : undefined);
     } finally {
       if (listRequestRef.current === requestId) {
@@ -257,7 +617,7 @@ export const HistoryView = React.memo(({
       const data = await fetchPage(cursor);
       if (listRequestRef.current !== requestId) return;
       setItems((prev) => [...prev, ...data]);
-      setHasMore(data.length >= HISTORY_PAGE_SIZE);
+      setHasMore(data.length >= PAGE_SIZE);
       setCursor(data.length ? data[data.length - 1].timestamp : cursor);
     } finally {
       if (listRequestRef.current === requestId) {
@@ -268,15 +628,28 @@ export const HistoryView = React.memo(({
 
   useEffect(() => {
     if (!isOpen) return;
+    if (typeof window === "undefined") return;
+    const stored = window.localStorage.getItem(SUMMARY_VIEW_KEY);
+    if (!isSummaryView(stored)) return;
+    if (stored === filter) return;
+    skipSummarySyncRef.current = true;
+    setFilter(stored);
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
     if (skipSummarySyncRef.current) {
       skipSummarySyncRef.current = false;
       return;
     }
     if (filter === "week") return;
     syncSummaryView(mapFilterToSummaryView(filter));
-  }, [filter, isOpen, syncSummaryView]);
+  }, [filter, isOpen]);
 
-  // E: loadFirstPage effect removed — metrics effect populates items directly
+  useEffect(() => {
+    if (!isOpen) return;
+    void loadFirstPage();
+  }, [isOpen, loadFirstPage, refreshKey]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -300,21 +673,18 @@ export const HistoryView = React.memo(({
     return () => window.clearTimeout(handle);
   }, [query]);
 
-  useEffect(() => {
-    const handle = window.setTimeout(() => {
-      setDebouncedCustomStart(customStart);
-    }, 400);
-    return () => window.clearTimeout(handle);
-  }, [customStart]);
 
-  useEffect(() => {
-    const handle = window.setTimeout(() => {
-      setDebouncedCustomEnd(customEnd);
-    }, 400);
-    return () => window.clearTimeout(handle);
-  }, [customEnd]);
-
-  const formatCurrency = formatCurrencyUtil;
+  const formatCurrency = useCallback(
+    (
+      value: number,
+      options: Intl.NumberFormatOptions = {}
+    ) =>
+      value.toLocaleString("en-IN", {
+        maximumFractionDigits: 2,
+        ...options,
+      }),
+    []
+  );
 
   const formatRangeLabel = useCallback((start: number, end: number) => {
     const startDate = new Date(start);
@@ -350,20 +720,13 @@ export const HistoryView = React.memo(({
       ].join("|");
       const cached = metricsCacheRef.current.get(cacheKey);
       if (cached) {
-        // Batch all state updates in a single callback to avoid cascading re-renders
-        React.startTransition(() => {
-          setRangeTransactions(cached.rangeTransactions);
-          setTrendMetrics(cached.trendMetrics);
-          setTrendRangeLabels(cached.trendRangeLabels);
-          setItems(cached.rangeTransactions);
-          setHasMore(false);
-          setIsMetricsLoading(false);
-          setIsLoading(false);
-        });
+        setRangeTransactions(cached.rangeTransactions);
+        setTrendMetrics(cached.trendMetrics);
+        setTrendRangeLabels(cached.trendRangeLabels);
+        setIsMetricsLoading(false);
         return;
       }
       setIsMetricsLoading(true);
-      setIsLoading(true);
       try {
         const base = changeRange;
         const MS_DAY = 24 * 60 * 60 * 1000;
@@ -410,11 +773,11 @@ export const HistoryView = React.memo(({
             }
             : null;
 
-        const baseTransactionsPromise = base && currentDeviceId
-          ? fetchTransactions({ range: { start: base.start, end: base.end }, ownerId: currentDeviceId })
+        const baseTransactionsPromise = base
+          ? getTransactionsInRange(base.start, base.end)
           : Promise.resolve([] as Transaction[]);
-        const prevTransactionsPromise = prevRange && currentDeviceId
-          ? fetchTransactions({ range: { start: prevRange.start, end: prevRange.end }, ownerId: currentDeviceId })
+        const prevTransactionsPromise = prevRange
+          ? getTransactionsInRange(prevRange.start, prevRange.end)
           : Promise.resolve([] as Transaction[]);
         const rangeMatchesBase =
           !!base &&
@@ -422,8 +785,8 @@ export const HistoryView = React.memo(({
           base.start === range.start &&
           base.end === range.end;
         const rangeTransactionsPromise =
-          range && !rangeMatchesBase && currentDeviceId
-            ? fetchTransactions({ range: { start: range.start, end: range.end }, ownerId: currentDeviceId })
+          range && !rangeMatchesBase
+            ? getTransactionsInRange(range.start, range.end)
             : Promise.resolve([] as Transaction[]);
 
         const [baseTransactions, prevTransactions, rangeTransactions] =
@@ -514,7 +877,8 @@ export const HistoryView = React.memo(({
         const previousLabel = prevRange
           ? formatRangeLabel(prevRange.start, prevRange.end)
           : "";
-        const computedTrendMetrics = {
+        setRangeTransactions(resolvedRangeTransactions);
+        setTrendMetrics({
           totalBase,
           totalPrev,
           delta,
@@ -524,17 +888,9 @@ export const HistoryView = React.memo(({
           prevCount,
           days,
           series,
-          bucket: (useHourly ? "hour" : "day") as "hour" | "day",
-        };
-        const computedLabels = { current: currentLabel, previous: previousLabel };
-        // Batch all state updates to avoid cascading re-renders
-        React.startTransition(() => {
-          setRangeTransactions(resolvedRangeTransactions);
-          setItems(resolvedRangeTransactions);
-          setHasMore(false);
-          setTrendMetrics(computedTrendMetrics);
-          setTrendRangeLabels(computedLabels);
+          bucket: useHourly ? "hour" : "day",
         });
+        setTrendRangeLabels({ current: currentLabel, previous: previousLabel });
         metricsCacheRef.current.set(cacheKey, {
           rangeTransactions: resolvedRangeTransactions,
           trendMetrics: {
@@ -552,10 +908,7 @@ export const HistoryView = React.memo(({
           trendRangeLabels: { current: currentLabel, previous: previousLabel },
         });
       } finally {
-        if (active) {
-          setIsMetricsLoading(false);
-          setIsLoading(false);
-        }
+        if (active) setIsMetricsLoading(false);
       }
     };
     void loadMetrics();
@@ -564,7 +917,6 @@ export const HistoryView = React.memo(({
     };
   }, [
     changeRange,
-    currentDeviceId,
     filter,
     formatRangeLabel,
     isOpen,
@@ -706,13 +1058,14 @@ export const HistoryView = React.memo(({
 
   const exportTransactions = async () => {
     if (isExporting) return;
-    if (!range || !currentDeviceId) return;
+    if (!range) return;
     setIsExporting(true);
     try {
-      // D: Use already-fetched rangeTransactions; fall back to fetch only while metrics is loading
-      const transactions = isMetricsLoading
-        ? await fetchTransactions({ range: { start: range.start, end: range.end }, ownerId: currentDeviceId })
-        : rangeTransactions;
+      const transactions = await getTransactionsInRange(
+        range.start,
+        range.end
+      );
+
       const headers = [
         "Date",
         "Amount",
@@ -740,11 +1093,6 @@ export const HistoryView = React.memo(({
       link.click();
       link.remove();
       window.URL.revokeObjectURL(url);
-      posthog.capture("expenses_exported", {
-        transaction_count: transactions.length,
-        filter_type: filter,
-        date_range_label: getExportLabel(),
-      });
     } finally {
       setIsExporting(false);
     }
@@ -918,21 +1266,21 @@ export const HistoryView = React.memo(({
     [findTxById, onEdit]
   );
 
-  const handleTogglePrivate = useCallback(
-    async (id: string, nextPrivate: boolean) => {
-      const shared = await isTransactionShared(id);
-      if (shared && nextPrivate) return; // Prevent marking shared as private
-      const tx = findTxById(id);
-      if (!tx) return;
-      await updateTransaction(id, { is_private: nextPrivate });
-      void loadFirstPage();
-    },
-    [findTxById, loadFirstPage]
-  );
-
   const mobileSheetTx = mobileSheetTxId ? findTxById(mobileSheetTxId) : null;
 
-  const donutSegments: DonutSegment[] = useMemo(() => {
+  const openMobileSheet = useCallback((id: string) => {
+    setMobileSheetTxId(id);
+    setMobileConfirmDelete(false);
+    setIsMobileSheetOpen(true);
+  }, []);
+
+  const closeMobileSheet = useCallback(() => {
+    setIsMobileSheetOpen(false);
+    setMobileConfirmDelete(false);
+    setMobileSheetTxId(null);
+  }, []);
+
+  const donutSegments = useMemo(() => {
     if (allocationMetrics.totalRange <= 0) return [];
     if (allocationMetrics.topCategories.length < 1) return [];
     const colors = [
@@ -1003,41 +1351,328 @@ export const HistoryView = React.memo(({
                   </div>
                 </div>
 
-                <HistoryFilters
-                  query={query}
-                  onQueryChange={setQuery}
-                  filter={filter}
-                  onFilterChange={setFilter}
-                  customStart={customStart}
-                  customEnd={customEnd}
-                  onCustomStartChange={setCustomStart}
-                  onCustomEndChange={setCustomEnd}
-                  onDebouncedStartChange={setDebouncedCustomStart}
-                  onDebouncedEndChange={setDebouncedCustomEnd}
-                  isExporting={isExporting}
-                  isExportDisabled={range === null}
-                  onExport={exportTransactions}
-                />
+                {/* Search and Filters */}
+                <div className="kk-radius-md kk-shadow-sm mt-4 border border-[var(--kk-smoke)] bg-[var(--kk-cream)]/70 p-3">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="relative flex-1">
+                      <input
+                        value={query}
+                        onChange={(event) => setQuery(event.target.value)}
+                        placeholder="Search expenses..."
+                        className="kk-input pl-4 text-sm shadow-[var(--kk-shadow-md)] sm:pl-10"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={exportTransactions}
+                      disabled={isExporting || range === null}
+                      className="kk-btn-secondary kk-btn-compact order-3 w-full lg:order-none lg:w-auto"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      Export
+                    </button>
+                  </div>
+                  <div className="mt-3 flex w-full items-center gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+                    {[
+                      { key: "today", label: "Today" },
+                      { key: "week", label: "This week" },
+                      { key: "month", label: "This Month" },
+                      { key: "custom", label: "Custom" },
+                    ].map((option) => (
+                      <button
+                        key={option.key}
+                        type="button"
+                        onClick={() => {
+                          const next = option.key as FilterKey;
+                          setFilter(next);
+                        }}
+                        className={`kk-chip kk-chip-filter whitespace-nowrap transition ${filter === option.key ? "kk-chip-active" : "kk-chip-muted"
+                          }`}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                  {(
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-left text-[var(--kk-ash)] opacity-80 transition">
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-2xl border border-[var(--kk-smoke)] bg-white/60 px-4 py-2.5 transition-all focus-within:border-[var(--kk-smoke-heavy)] sm:rounded-full sm:px-3 sm:py-1">
+                        <label className="kk-label flex items-center gap-2">
+                          <span className="opacity-70 sm:opacity-100">From</span>
+                          <span className="flex items-center gap-0.5">
+                            <input
+                              type="date"
+                              value={customStart}
+                              ref={customStartRef}
+                              inputMode="none"
+                              aria-readonly="true"
+                              onMouseDown={(event) => {
+                                event.preventDefault();
+                              }}
+                              onClick={() => {
+                                if (filter !== "custom") setFilter("custom");
+                                window.setTimeout(() => {
+                                  triggerPicker(customStartRef);
+                                }, 0);
+                              }}
+                              onKeyDown={(event) => {
+                                event.preventDefault();
+                              }}
+                              onBeforeInput={(event) => {
+                                event.preventDefault();
+                              }}
+                              onPaste={(event) => {
+                                event.preventDefault();
+                              }}
+                              onChange={(event) => {
+                                if (filter !== "custom") setFilter("custom");
+                                setCustomStart(event.target.value);
+                              }}
+                              className="kk-input kk-input-compact kk-date-input w-[6.25rem] bg-transparent normal-case text-[var(--kk-ink)] outline-none disabled:pointer-events-none disabled:cursor-default disabled:text-[var(--kk-ash)] sm:w-[7rem]"
+                            />
+                            <button
+                              type="button"
+                              aria-label="Open start date picker"
+                              onClick={() => {
+                                if (filter !== "custom") {
+                                  setFilter("custom");
+                                  window.setTimeout(() => {
+                                    triggerPicker(customStartRef);
+                                  }, 0);
+                                } else {
+                                  triggerPicker(customStartRef);
+                                }
+                              }}
+                              className="kk-icon-btn kk-icon-btn-ghost kk-icon-btn-sm -ml-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--kk-ember)]/40 disabled:pointer-events-none"
+                            >
+                              <Calendar className="h-3.5 w-3.5" />
+                            </button>
+                          </span>
+                        </label>
+                        <ArrowRight className="hidden h-3 w-3 text-[var(--kk-ash)] sm:block" />
+                        <label className="kk-label flex items-center gap-2">
+                          <span className="opacity-70 sm:opacity-100">To</span>
+                          <span className="flex items-center gap-0.5">
+                            <input
+                              type="date"
+                              value={customEnd}
+                              min={customStart || undefined}
+                              ref={customEndRef}
+                              inputMode="none"
+                              aria-readonly="true"
+                              onMouseDown={(event) => {
+                                event.preventDefault();
+                              }}
+                              onClick={() => {
+                                if (filter !== "custom") setFilter("custom");
+                                window.setTimeout(() => {
+                                  triggerPicker(customEndRef);
+                                }, 0);
+                              }}
+                              onKeyDown={(event) => {
+                                event.preventDefault();
+                              }}
+                              onBeforeInput={(event) => {
+                                event.preventDefault();
+                              }}
+                              onPaste={(event) => {
+                                event.preventDefault();
+                              }}
+                              onChange={(event) => {
+                                if (filter !== "custom") setFilter("custom");
+                                setCustomEnd(event.target.value);
+                              }}
+                              className="kk-input kk-input-compact kk-date-input w-[6.25rem] bg-transparent normal-case text-[var(--kk-ink)] outline-none disabled:pointer-events-none disabled:cursor-default disabled:text-[var(--kk-ash)] sm:w-[7rem]"
+                            />
+                            <button
+                              type="button"
+                              aria-label="Open end date picker"
+                              onClick={() => {
+                                if (filter !== "custom") {
+                                  setFilter("custom");
+                                  window.setTimeout(() => {
+                                    triggerPicker(customEndRef);
+                                  }, 0);
+                                } else {
+                                  triggerPicker(customEndRef);
+                                }
+                              }}
+                              className="kk-icon-btn kk-icon-btn-ghost kk-icon-btn-sm -ml-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--kk-ember)]/40 disabled:pointer-events-none"
+                            >
+                              <Calendar className="h-3.5 w-3.5" />
+                            </button>
+                          </span>
+                        </label>
+                      </div>
+                    </div>
+                  )}
+                </div>
 
-                <MetricsDashboard
-                  shouldShowMetrics={shouldShowMetrics}
-                  shouldShowTrends={shouldShowTrends}
-                  shouldShowSummary={shouldShowSummary}
-                  isMetricsLoading={isMetricsLoading}
-                  trendMetrics={trendMetrics}
-                  trendRangeLabels={trendRangeLabels}
-                  chartMeta={chartMeta}
-                  chartReady={chartReady}
-                  dayLabels={dayLabels}
-                  hasPrevData={hasPrevData}
-                  deltaLabel={deltaLabel}
-                  percentLabel={percentLabel}
-                  allocationMode={allocationMode}
-                  onAllocationModeChange={setAllocationMode}
-                  allocationMetrics={allocationMetrics}
-                  donutSegments={donutSegments}
-                  formatCurrency={formatCurrency}
-                />
+                {shouldShowMetrics && (
+                  <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                    {shouldShowTrends && (
+                      <div className="kk-surface kk-shadow-sm p-4">
+                        <div className="flex flex-col gap-3">
+                          <div>
+                            <div className="kk-label">
+                              Trends
+                            </div>
+                            <div className="mt-1 space-y-0.5 text-[12px] text-[var(--kk-ash)]">
+                              {isMetricsLoading ? (
+                                <div className="kk-skeleton h-4 w-40" />
+                              ) : (
+                                <>
+                                  <div className="flex items-center gap-2">
+                                    <span className="h-2 w-2 rounded-full bg-[var(--kk-ember)]" />
+                                    This period:{" "}
+                                    <span className="text-[var(--kk-ink)]">
+                                      {trendRangeLabels.current || "—"}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="h-2 w-2 rounded-full bg-[var(--kk-ash)]" />
+                                    Previous period:{" "}
+                                    <span className="text-[var(--kk-ink)]">
+                                      {trendRangeLabels.previous || "—"}
+                                    </span>
+                                  </div>
+                                </>
+                              )}
+                            </div>
+                            <div className="mt-2 text-sm font-medium text-[var(--kk-ash)]">
+                              {isMetricsLoading ? (
+                                <div className="kk-skeleton h-5 w-24" />
+                              ) : hasPrevData ? (
+                                <span
+                                  className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium tracking-wide font-[family:var(--font-mono)] ${trendMetrics.delta >= 0
+                                    ? "text-[var(--kk-ember-deep)]/70"
+                                    : "text-[var(--kk-ash)]"
+                                    }`}
+                                >
+                                  {deltaLabel} ({percentLabel})
+                                </span>
+                              ) : (
+                                <span className="text-[var(--kk-ash)]">
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="group relative mt-2 flex min-h-[160px] w-full items-center justify-start">
+                            <TrendChart
+                              chartMeta={chartMeta}
+                              chartReady={chartReady}
+                              isMetricsLoading={isMetricsLoading}
+                              dayLabels={dayLabels}
+                              bucket={trendMetrics.bucket}
+                              totalBase={trendMetrics.totalBase}
+                              totalPrev={trendMetrics.totalPrev}
+                              formatCurrency={formatCurrency}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {shouldShowSummary && (
+                      <div className="kk-surface kk-shadow-sm p-4">
+                        <div className="kk-label">
+                          Summary
+                        </div>
+                        <div className="mt-2 flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setAllocationMode("amount")}
+                            className={`kk-chip kk-chip-filter transition ${allocationMode === "amount"
+                              ? "kk-chip-active"
+                              : "kk-chip-muted"
+                              }`}
+                          >
+                            Amount
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setAllocationMode("count")}
+                            className={`kk-chip kk-chip-filter transition ${allocationMode === "count"
+                              ? "kk-chip-active"
+                              : "kk-chip-muted"
+                              }`}
+                          >
+                            Count
+                          </button>
+                        </div>
+                        <div className="mt-4 flex min-h-[160px] flex-col items-center justify-center gap-5">
+                          {donutSegments.length >= 1 ? (
+                            <svg
+                              aria-hidden
+                              viewBox="0 0 42 42"
+                              className="h-28 w-28"
+                            >
+                              <circle
+                                cx="21"
+                                cy="21"
+                                r="16"
+                                fill="none"
+                                stroke="var(--kk-smoke-heavy)"
+                                strokeWidth="6"
+                              />
+                              {donutSegments.map((segment, index) => (
+                                <circle
+                                  key={`${segment.color}-${index}`}
+                                  cx="21"
+                                  cy="21"
+                                  r="16"
+                                  fill="none"
+                                  stroke={segment.color}
+                                  strokeWidth="6"
+                                  strokeDasharray={segment.dashArray}
+                                  strokeDashoffset={segment.offset}
+                                  pathLength={100}
+                                  strokeLinecap="round"
+                                />
+                              ))}
+                            </svg>
+                          ) : (
+                            <div className="flex h-28 w-28 items-center justify-center rounded-full border border-[var(--kk-smoke-heavy)] kk-micro text-[var(--kk-ash)]">
+                              —
+                            </div>
+                          )}
+                          <div
+                            className={`grid gap-x-6 gap-y-2 text-[13px] text-[var(--kk-ash)] ${allocationMetrics.topCategories.length <= 1 ? "justify-items-center text-center" : "grid-cols-1 sm:grid-cols-2"}`}
+                          >
+                            {allocationMetrics.topCategories.length === 0 ? (
+                              <span>—</span>
+                            ) : (
+                              allocationMetrics.topCategories.map((category, index) => {
+                                const share = allocationMetrics.totalRange
+                                  ? Math.round(
+                                    (category.total / allocationMetrics.totalRange) * 100
+                                  )
+                                  : 0;
+                                const absoluteValue =
+                                  allocationMode === "count"
+                                    ? String(category.total)
+                                    : `₹${formatCurrency(category.total)}`;
+                                return (
+                                  <div key={category.label} className="flex items-center gap-3">
+                                    <span
+                                      className="h-2.5 w-2.5 rounded-full"
+                                      style={{ background: donutSegments[index]?.color }}
+                                    />
+                                    <span className="text-[var(--kk-ink)]">
+                                      {category.label}
+                                    </span>
+                                    <span className="text-[var(--kk-ash)]">
+                                      {absoluteValue} ({share}%)
+                                    </span>
+                                  </div>
+                                );
+                              })
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </header>
 
               {/* Transaction List */}
@@ -1074,6 +1709,7 @@ export const HistoryView = React.memo(({
                                 tx={tx}
                                 index={index}
                                 metaVariant="time"
+                                isMobile={isMobile}
                                 hasEdit={hasEdit}
                                 onEdit={hasEdit ? handleEdit : undefined}
                                 onDelete={handleDelete}
@@ -1104,7 +1740,7 @@ export const HistoryView = React.memo(({
                 )}
               </div>
             </div>
-          </div >
+          </div>
 
           <TransactionActionSheet
             isOpen={isMobileSheetOpen}
@@ -1115,14 +1751,10 @@ export const HistoryView = React.memo(({
             onClose={closeMobileSheet}
             onEdit={hasEdit ? handleEdit : undefined}
             onDelete={handleDelete}
-            onTogglePrivate={handleTogglePrivate}
-            isShared={isMobileSheetShared}
             formatCurrency={formatCurrency}
           />
-        </motion.div >
+        </motion.div>
       )}
-    </AnimatePresence >
+    </AnimatePresence>
   );
-});
-
-HistoryView.displayName = "HistoryView";
+};

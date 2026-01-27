@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, Pencil, Trash2 } from "lucide-react";
+import { Check, Pencil, X } from "lucide-react";
 
 interface TransactionRowActionsProps {
   itemLabel: string;
@@ -75,7 +75,7 @@ export const TransactionRowActions = ({
               exit={{ scale: 0.6, opacity: 0 }}
               transition={{ duration: 0.18 }}
             >
-              <Trash2 className="h-3.5 w-3.5" />
+              <X className="h-3.5 w-3.5" />
             </motion.span>
           )}
         </AnimatePresence>

@@ -1,11 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { RECEIPT_PROMPT } from "@/src/utils/prompts";
-import { formatDateYMD } from "@/src/utils/dates";
-import { getPostHogClient } from "@/src/lib/posthog-server";
 
 export const runtime = "nodejs";
 
 const GEMINI_MODEL = "models/gemini-2.5-flash";
+
+const formatDateYMD = (value: Date) => {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
 
 export async function POST(request: NextRequest) {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -59,21 +64,5 @@ export async function POST(request: NextRequest) {
     }>;
   };
   const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text ?? "{}";
-
-  // Track successful receipt parsing server-side
-  const distinctId = request.headers.get("x-posthog-distinct-id") || "anonymous";
-  const posthog = getPostHogClient();
-  if (posthog) {
-    posthog.capture({
-      distinctId,
-      event: "receipt_parsed",
-      properties: {
-        image_size_bytes: buffer.byteLength,
-        image_mime_type: mimeType,
-        output_length: rawText.length,
-      },
-    });
-  }
-
   return NextResponse.json({ text: rawText });
 }
