@@ -3,18 +3,24 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { AppProvider, useAppContext } from "@/src/context/AppContext";
-import { MicButton } from "@/src/components/MicButton";
+import { BottomTabBar, TabType } from "@/src/components/BottomTabBar";
 import { EditModal } from "@/src/components/EditModal";
-import { TransactionList } from "@/src/components/TransactionList";
+import { SummaryView } from "@/src/components/SummaryView";
+import { TransactionsView } from "@/src/components/TransactionsView";
+import { RecurringView } from "@/src/components/RecurringView";
+import { RecurringEditModal } from "@/src/components/RecurringEditModal";
+import { ProfileView } from "@/src/components/ProfileView";
 import { HistoryView } from "@/src/components/HistoryView";
 import { RecordingStatus } from "@/src/components/RecordingStatus";
+import type { RecurringTemplate } from "@/src/config/recurring";
+import { addRecurringExpense, updateRecurringExpense } from "@/src/db/db";
 import { useAudioRecorder } from "@/src/hooks/useAudioRecorder";
 import { parseWithGeminiFlash } from "@/src/services/gemini";
 import { parseReceiptWithGemini } from "@/src/services/receipt";
 import { transcribeAudio } from "@/src/services/sarvam";
 import { addTransaction, deleteTransaction, updateTransaction } from "@/src/db/db";
 import type { Expense } from "@/src/utils/schemas";
-import type { Transaction } from "@/src/types";
+import type { Transaction, RecurringExpense } from "@/src/types";
 import { AlertCircle, PenLine, ImageUp } from "lucide-react";
 import { prepareReceiptImage } from "@/src/utils/imageProcessing";
 import {
@@ -99,6 +105,11 @@ const AppShell = () => {
   const [isTxnSheetOpen, setIsTxnSheetOpen] = useState(false);
   const [isAboutVisible, setIsAboutVisible] = useState(false);
   const [isReceiptProcessing, setIsReceiptProcessing] = useState(false);
+  const [activeTab, setActiveTab] = useState<TabType>("summary");
+  const [isRecurringModalOpen, setIsRecurringModalOpen] = useState(false);
+  const [recurringModalMode, setRecurringModalMode] = useState<"new" | "edit">("new");
+  const [selectedTemplate, setSelectedTemplate] = useState<RecurringTemplate | null>(null);
+  const [selectedRecurringExpense, setSelectedRecurringExpense] = useState<RecurringExpense | null>(null);
   const processedBlobRef = useRef<Blob | null>(null);
   const processingRef = useRef(false);
   const receiptProcessingRef = useRef(false);
@@ -449,8 +460,51 @@ const AppShell = () => {
     setRefreshKey((prev) => prev + 1);
   }, []);
 
+  const handleAddRecurring = useCallback((template?: RecurringTemplate) => {
+    setSelectedTemplate(template ?? null);
+    setSelectedRecurringExpense(null);
+    setRecurringModalMode("new");
+    setIsRecurringModalOpen(true);
+  }, []);
+
+  const handleEditRecurring = useCallback((expense: RecurringExpense) => {
+    setSelectedRecurringExpense(expense);
+    setSelectedTemplate(null);
+    setRecurringModalMode("edit");
+    setIsRecurringModalOpen(true);
+  }, []);
+
+  const handleCloseRecurringModal = useCallback(() => {
+    setIsRecurringModalOpen(false);
+    setSelectedTemplate(null);
+    setSelectedRecurringExpense(null);
+  }, []);
+
+  const handleSaveRecurring = useCallback(
+    async (data: Omit<RecurringExpense, "id" | "createdAt" | "updatedAt">) => {
+      if (recurringModalMode === "edit" && selectedRecurringExpense) {
+        await updateRecurringExpense(selectedRecurringExpense.id, data);
+      } else {
+        await addRecurringExpense({
+          ...data,
+          id: "",
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+      }
+      setRefreshKey((prev) => prev + 1);
+      handleCloseRecurringModal();
+    },
+    [recurringModalMode, selectedRecurringExpense, handleCloseRecurringModal]
+  );
+
+  const handleRecurringPaid = useCallback((tx: Transaction) => {
+    setAddedTx(tx);
+    setRefreshKey((prev) => prev + 1);
+  }, []);
+
   return (
-    <div className="relative min-h-screen bg-[var(--kk-paper)] pb-28 text-[var(--kk-ink)]">
+    <div className="relative min-h-screen bg-[var(--kk-paper)] pb-24 text-[var(--kk-ink)]">
       {/* Background gradient orbs */}
       <div
         aria-hidden
@@ -516,7 +570,7 @@ const AppShell = () => {
       </header>
 
       {/* Main Content */}
-      <main className="relative z-10 mx-auto max-w-4xl px-4 pb-24 pt-6 sm:px-6">
+      <main className="relative z-10 mx-auto max-w-4xl px-4 pb-28 pt-6 sm:px-6">
         {isAboutVisible && (
           <section className="mb-6 kk-card px-5 py-4">
             <div className="flex items-start justify-between gap-4">
@@ -612,27 +666,49 @@ const AppShell = () => {
           isReceiptProcessing={isReceiptProcessing}
         />
 
-        {/* Transaction List */}
+        {/* Tab Content */}
         <section>
-          <TransactionList
-            refreshKey={refreshKey}
-            addedTx={addedTx}
-            deletedTx={deletedTx}
-            editedTx={editedTx}
-            onViewAll={handleOpenHistory}
-            onEdit={openEdit}
-            onMobileSheetChange={setIsTxnSheetOpen}
-            onDeleted={handleTransactionDeleted}
-          />
+          {activeTab === "summary" && (
+            <SummaryView
+              refreshKey={refreshKey}
+              addedTx={addedTx}
+              deletedTx={deletedTx}
+              editedTx={editedTx}
+            />
+          )}
+          {activeTab === "transactions" && (
+            <TransactionsView
+              refreshKey={refreshKey}
+              addedTx={addedTx}
+              deletedTx={deletedTx}
+              editedTx={editedTx}
+              onViewAll={handleOpenHistory}
+              onEdit={openEdit}
+              onMobileSheetChange={setIsTxnSheetOpen}
+              onDeleted={handleTransactionDeleted}
+            />
+          )}
+          {activeTab === "recurring" && (
+            <RecurringView
+              refreshKey={refreshKey}
+              onAddRecurring={handleAddRecurring}
+              onEditRecurring={handleEditRecurring}
+              onPaid={handleRecurringPaid}
+            />
+          )}
+          {activeTab === "profile" && (
+            <ProfileView />
+          )}
         </section>
       </main>
 
-      {/* Mic Button */}
+      {/* Bottom Tab Bar */}
       {!isTxnSheetOpen && (
-        <MicButton
+        <BottomTabBar
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
           isRecording={isRecording}
-          startRecording={handleStartRecording}
-          stopRecording={handleStopRecording}
+          onMicPress={isRecording ? handleStopRecording : handleStartRecording}
         />
       )}
       <input
@@ -654,6 +730,16 @@ const AppShell = () => {
         timestamp={editState?.timestamp ?? Date.now()}
         onClose={handleCloseEdit}
         onSave={handleSaveEdit}
+      />
+
+      {/* Recurring Edit Modal */}
+      <RecurringEditModal
+        isOpen={isRecurringModalOpen}
+        mode={recurringModalMode}
+        template={selectedTemplate}
+        expense={selectedRecurringExpense}
+        onClose={handleCloseRecurringModal}
+        onSave={handleSaveRecurring}
       />
 
       {/* History View */}
