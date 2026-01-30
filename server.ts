@@ -5,11 +5,7 @@ const PORT = process.env.PORT || 7071;
 const PRESENCE_TTL_MS = 60 * 1000; // 60 seconds for presence
 const PAIRING_TTL_MS = 5 * 60 * 1000; // S6.T6: 5 minutes for pairing sessions
 
-const server = createServer((req, res) => {
-  // Handle basic health checks for Render/Uptime services
-  res.writeHead(200);
-  res.end("OK");
-});
+const server = createServer();
 const wss = new WebSocketServer({ server });
 
 interface Client {
@@ -70,7 +66,7 @@ setInterval(pruneExpiredPairingSessions, 30 * 1000); // S6.T6: Check every 30 se
 
 wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
   const ip = normalizeIp(req.socket.remoteAddress || "");
-
+  console.log(`[Server] New connection from ${ip}`);
 
   ws.on("message", (raw: string | Buffer) => {
     let message: any;
@@ -82,7 +78,7 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
     if (!message || !message.type) return;
 
     const { type, payload, request_id } = message;
-
+    console.log(`[Server] Message received: ${type} from IP: ${ip}`);
 
     if (type === "presence:join") {
       const deviceId = payload?.device_id;
@@ -94,7 +90,7 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
         lastSeen: Date.now(),
         ip,
       });
-
+      console.log(`[Server] Device joined: ${payload?.display_name} (${deviceId})`);
       sendMessage(ws, "presence:ack", { ok: true }, request_id);
       return;
     }
@@ -112,14 +108,14 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
       const deviceId = payload?.device_id;
       const requester = clients.get(deviceId);
       const requesterIp = requester?.ip || ip;
-
+      console.log(`[Server] Listing devices for ${deviceId} at ${requesterIp}`);
 
       const list = Array.from(clients.values())
         .filter((client) => client.ws.readyState === WebSocket.OPEN)
         .filter((client) => {
           const match = requesterIp ? client.ip === requesterIp : true;
           if (!match) {
-
+            console.log(`[Server] Filtering out ${client.display_name} (${client.ip} !== ${requesterIp})`);
           }
           return match;
         })
@@ -133,16 +129,11 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
 
     // S6.T6: Handle pairing:request - create session with TTL
     if (type === "pairing:request") {
-      const timestamp = new Date().toISOString();
       const sessionId = payload?.session_id;
       const fromDeviceId = payload?.from_device_id;
       const toDeviceId = payload?.to_device_id;
-      const fromDisplayName = payload?.from_display_name;
-
-
 
       if (!sessionId || !fromDeviceId || !toDeviceId) {
-
         sendMessage(ws, "error", { message: "Invalid pairing request" }, request_id);
         return;
       }
@@ -153,17 +144,15 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
         from_device_id: fromDeviceId,
         to_device_id: toDeviceId,
       });
-
+      console.log(`[Pairs] Session created: ${sessionId} (${fromDeviceId} -> ${toDeviceId})`);
 
       // Forward to target device
       const target = clients.get(toDeviceId);
-
-
       if (target) {
-
+        console.log(`[Pairs] Forwarding ${type} to ${toDeviceId}`);
         sendMessage(target.ws, type, payload, request_id);
       } else {
-
+        console.warn(`[Pairs] Forward failed: ${toDeviceId} not connected`);
         sendMessage(ws, "error", { message: "Target device not connected" }, request_id);
       }
       return;
@@ -245,50 +234,6 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
       return;
     }
 
-    // Handle pairing:cancel - cancel an active pairing request
-    if (type === "pairing:cancel") {
-      const sessionId = payload?.session_id;
-      const toDeviceId = payload?.to_device_id;
-      const fromDeviceId = payload?.from_device_id;
-      const fromDisplayName = payload?.from_display_name;
-      const timestamp = new Date().toISOString();
-
-
-
-      if (!sessionId || !toDeviceId) {
-
-        sendMessage(ws, "error", { message: "Invalid pairing cancel" }, request_id);
-        return;
-      }
-
-      // Check if session exists
-      const session = pairingSessions.get(sessionId);
-      if (!session) {
-
-        // Still try to forward in case client needs to clear state
-      } else {
-
-      }
-
-      // Forward to target device
-      const target = clients.get(toDeviceId);
-      if (target) {
-
-        sendMessage(target.ws, type, payload, request_id);
-
-      } else {
-
-        sendMessage(ws, "error", { message: "Target device not connected" }, request_id);
-      }
-
-      // Clean up the session since it was cancelled
-      if (session) {
-
-        pairingSessions.delete(sessionId);
-      }
-      return;
-    }
-
     // Handle pairing:reject - forward failure/retry status
     if (type === "pairing:reject") {
       const sessionId = payload?.session_id;
@@ -315,8 +260,7 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
       // If the rejection is terminal (e.g. max attempts), we could delete the session here.
       // But we'll rely on the client to stop and the server's TTL to clean up.
       // Or we can check a flag:
-      if (payload?.final || payload?.reason === "cancelled") {
-
+      if (payload?.final) {
         pairingSessions.delete(sessionId);
       }
       return;
@@ -335,15 +279,15 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
       // Forward to target
       const target = clients.get(toDeviceId);
       if (target) {
-
+        console.log(`[Pairs] Forwarding ${type} to ${toDeviceId}`);
         sendMessage(target.ws, type, payload, request_id);
       } else {
-
+        console.warn(`[Pairs] Forward failed: ${toDeviceId} not connected`);
         sendMessage(ws, "error", { message: "Target device not connected" }, request_id);
       }
 
       // S6.T6: Session complete - remove to prevent reuse
-
+      console.log(`[Pairs] Session complete: ${sessionId}`);
       pairingSessions.delete(sessionId);
       return;
     }
@@ -356,11 +300,11 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
     ) {
       const targetId = payload?.to_device_id;
       const target = clients.get(targetId);
-
+      console.log(`[WebRTC] Forwarding ${type} to ${targetId}`);
       if (target) {
         sendMessage(target.ws, type, payload, request_id);
       } else {
-
+        console.warn(`[WebRTC] Forward failed: ${targetId} offline`);
         sendMessage(ws, "error", { message: "Target device not connected" }, request_id);
       }
       return;
@@ -370,7 +314,7 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
   ws.on("close", () => {
     for (const [deviceId, client] of clients.entries()) {
       if (client.ws === ws) {
-
+        console.log(`[Server] Device disconnected: ${client.display_name} (${deviceId})`);
         clients.delete(deviceId);
       }
     }
@@ -378,5 +322,6 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
 });
 
 server.listen(PORT, () => {
-
+  // eslint-disable-next-line no-console
+  console.log(`Signaling server listening on :${PORT}`);
 });

@@ -26,7 +26,7 @@ export class SignalingClient {
 
         ws.onerror = () => {
           if (remaining > 0) {
-
+            console.log(`Signaling connection failed, retrying in ${delay}ms...`);
             setTimeout(() => attempt(remaining - 1, delay * 2), delay);
           } else {
             reject(new Error("Unable to connect to signaling server after multiple attempts"));
@@ -34,10 +34,8 @@ export class SignalingClient {
         };
 
         ws.onmessage = (event) => {
-
           try {
             const message = JSON.parse(String(event.data)) as SignalingMessage;
-
             if (message.request_id && this.pending.has(message.request_id)) {
               const resolver = this.pending.get(message.request_id);
               this.pending.delete(message.request_id);
@@ -45,17 +43,16 @@ export class SignalingClient {
               return;
             }
             const set = this.handlers.get(message.type);
-
             if (set) {
               set.forEach((handler) => handler(message.payload));
             }
-          } catch (e) {
-
+          } catch {
             // ignore malformed messages
           }
         };
 
         ws.onclose = () => {
+          this.handlers.clear();
           this.pending.clear();
         };
       };
@@ -68,16 +65,15 @@ export class SignalingClient {
     this.ws?.close();
     this.ws = null;
     this.pending.clear();
+    this.handlers.clear();
   }
 
   on(type: string, handler: Handler) {
-
     if (!this.handlers.has(type)) {
       this.handlers.set(type, new Set());
     }
     this.handlers.get(type)?.add(handler);
     return () => {
-
       this.handlers.get(type)?.delete(handler);
     };
   }

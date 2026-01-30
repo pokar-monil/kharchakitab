@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { RefreshCw, Shield, Users, X, AlertCircle, Smartphone, ArrowRight, Check, Wifi, WifiOff, Clock, ChevronRight, TrendingUp, Pencil } from "lucide-react";
+import { Copy, RefreshCw, Shield, Users, X, XCircle, AlertCircle, Smartphone, ArrowRight, Check, Wifi, WifiOff, Clock, ChevronRight, TrendingUp } from "lucide-react";
 import {
   clearConflict,
   getDeviceIdentity,
@@ -9,7 +9,7 @@ import {
   getSyncState,
   getTransactionById,
   getTransactionVersions,
-  fetchTransactions,
+  getTransactionsInRange,
   savePairing,
   removePairing,
   setDeviceDisplayName,
@@ -35,18 +35,13 @@ import { getRangeForFilter } from "@/src/utils/dates";
 import { formatCurrency } from "@/src/utils/money";
 import { TransactionRow } from "@/src/components/TransactionRow";
 import { useSyncEvents } from "@/src/hooks/useSyncEvents";
-import { useAppContext } from "@/src/context/AppContext";
-import { useSignaling } from "@/src/context/SignalingContext";
 
 const generateCode = () => Math.floor(1000 + Math.random() * 9000).toString();
 
 const isProcessingRow = (tx: Transaction) =>
   tx.item === "Processing…" || tx.item.startsWith("Processing ");
 
-const noopDelete = () => undefined;
-const noopMobileSheet = () => undefined;
-
-export const HouseholdView = React.memo(() => {
+export const HouseholdView = () => {
   // ---------------------------------------------------------------------------
   // STATE & LOGIC
   // ---------------------------------------------------------------------------
@@ -68,6 +63,10 @@ export const HouseholdView = React.memo(() => {
     total: number;
     chunks: { current: number; total: number };
   } | null>(null);
+  const [incomingPair, setIncomingPair] = useState<
+    | { session_id: string; from_device_id: string; from_display_name: string }
+    | null
+  >(null);
   const [activePartnerId, setActivePartnerId] = useState<string | null>(null);
   const [incomingCode, setIncomingCode] = useState("");
   const [outgoingPair, setOutgoingPair] = useState<
@@ -85,21 +84,12 @@ export const HouseholdView = React.memo(() => {
   const [conflictVersions, setConflictVersions] = useState<
     { snapshot: Transaction; editorId: string; updatedAt: number }[]
   >([]);
-  const [isErrorFading, setIsErrorFading] = useState(false);
-  const [confirmForgetId, setConfirmForgetId] = useState<string | null>(null);
-  const confirmForgetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // UX State: Control filtering and view limit
   const [householdFilter, setHouseholdFilter] = useState<"all" | "you" | "partner">("all");
   const [isEditingName, setIsEditingName] = useState(false);
   const [viewMode, setViewMode] = useState<"recent" | "full">("recent");
   const [householdTransactions, setHouseholdTransactions] = useState<Transaction[]>([]);
-
-  // Get tab control from AppContext for auto-switch on pairing request
-  const { setActiveTab, incomingPair, setIncomingPair } = useAppContext();
-
-  // Get shared signaling client from context
-  const { client } = useSignaling();
 
   const clientRef = useRef<SignalingClient | null>(null);
   const pairingKeyRef = useRef<{
@@ -112,7 +102,6 @@ export const HouseholdView = React.memo(() => {
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const dataChannelRef = useRef<RTCDataChannel | null>(null);
   const sharedKeyRef = useRef<CryptoKey | null>(null);
-  const isSearchingRef = useRef(false);
   const identityRef = useRef(identity);
   const outgoingPairRef = useRef(outgoingPair);
   const incomingPairRef = useRef(incomingPair);
@@ -122,34 +111,6 @@ export const HouseholdView = React.memo(() => {
   useEffect(() => { outgoingPairRef.current = outgoingPair; }, [outgoingPair]);
   useEffect(() => { incomingPairRef.current = incomingPair; }, [incomingPair]);
   useEffect(() => { pairingsRef.current = pairings; }, [pairings]);
-  useEffect(() => {
-    return () => {
-      if (confirmForgetTimeoutRef.current) {
-        clearTimeout(confirmForgetTimeoutRef.current);
-      }
-    };
-  }, []);
-
-  // Reset incoming code when a new pairing request arrives
-  useEffect(() => {
-    if (incomingPair) {
-      setIncomingCode("");
-    }
-  }, [incomingPair]);
-
-  // Auto-clear error messages after 5 seconds with fade animation
-  useEffect(() => {
-    if (errorMessage) {
-      setIsErrorFading(false);
-      const timer = setTimeout(() => {
-        setIsErrorFading(true);
-        setTimeout(() => {
-          setErrorMessage(null);
-        }, 500); // Wait for fade-out animation to complete
-      }, 5000); // Show error for 5 seconds
-      return () => clearTimeout(timer);
-    }
-  }, [errorMessage]);
 
   const { refreshTrigger } = useSyncEvents(pairings[0]?.partner_device_id);
 
@@ -169,7 +130,7 @@ export const HouseholdView = React.memo(() => {
   const fetchHouseholdTransactions = useCallback(async () => {
     const range = getRangeForFilter("month");
     if (!range) return;
-    const items = await fetchTransactions({ range: { start: range.start, end: range.end } });
+    const items = await getTransactionsInRange(range.start, range.end);
     const filtered = items
       .filter((tx) => !tx.is_private && !tx.deleted_at && !isProcessingRow(tx))
       .sort((a, b) => b.timestamp - a.timestamp);
@@ -177,13 +138,11 @@ export const HouseholdView = React.memo(() => {
   }, []);
 
   const refreshSyncState = useCallback(async () => {
-    const currentIdentity = await getDeviceIdentity();
-    if (!currentIdentity) return;
-
+    if (!identity) return;
     const pairingsList = await getPairings();
     setPairings(pairingsList);
     if (pairingsList.length === 0) {
-      setSyncStatus("No device paired");
+      setSyncStatus("No paired device yet");
       return;
     }
     const state = await getSyncState(pairingsList[0].partner_device_id);
@@ -198,10 +157,10 @@ export const HouseholdView = React.memo(() => {
       if (hours > 0) relative = `${hours}h ago`;
       if (days > 0) relative = `${days}d ago`;
 
-      setSyncStatus(`Last sync: ${relative}`);
+      setSyncStatus(`Synced ${relative}`);
     }
     setConflictIds(state?.conflicts ?? []);
-  }, []);
+  }, [identity]);
 
   const connectSignaling = useCallback(async () => {
     if (clientRef.current) {
@@ -215,41 +174,30 @@ export const HouseholdView = React.memo(() => {
   }, []);
 
   const refreshNearby = useCallback(async () => {
-    if (isSearchingRef.current) {
-      return;
-    }
-
-    isSearchingRef.current = true;
+    if (isSearching) return;
     setIsSearching(true);
     setErrorMessage(null);
     try {
-      // Fetch identity directly to avoid stale state
-      const device = await getDeviceIdentity();
-      if (!device) {
-
+      const client = await connectSignaling();
+      if (!identity) {
         setIsSearching(false);
         return;
       }
-
-      const client = await connectSignaling();
       client.send("presence:join", {
-        device_id: device.device_id,
-        display_name: device.display_name,
+        device_id: identity.device_id,
+        display_name: identity.display_name,
       });
       const list = await client.request<
         Array<{ device_id: string; display_name: string }>
-      >("presence:list", { device_id: device.device_id });
-      const filtered = list.filter((item) => item.device_id !== device.device_id);
-
+      >("presence:list", { device_id: identity.device_id });
+      const filtered = list.filter((item) => item.device_id !== identity.device_id);
       setNearbyDevices(filtered);
     } catch (error) {
-
       setErrorMessage("Unable to discover nearby devices");
     } finally {
-      isSearchingRef.current = false;
       setIsSearching(false);
     }
-  }, [connectSignaling]);
+  }, [connectSignaling, identity, isSearching]);
 
   const preparePairing = async (deviceId: string, displayName: string) => {
     if (!identity) return;
@@ -265,12 +213,6 @@ export const HouseholdView = React.memo(() => {
       from_display_name: identity.display_name,
       to_device_id: deviceId,
     });
-    if (typeof window !== "undefined") {
-      const isMobile = window.matchMedia("(max-width: 1024px)").matches;
-      if (isMobile) {
-        window.scrollTo({ top: 0, behavior: "smooth" });
-      }
-    }
   };
 
   const handleIncomingPairAccept = async () => {
@@ -282,29 +224,6 @@ export const HouseholdView = React.memo(() => {
       to_device_id: incomingPair.from_device_id,
       code: incomingCode.trim(),
     });
-  };
-
-  const handleIncomingPairCancel = async () => {
-    if (!incomingPair || !identity) return;
-    const timestamp = new Date().toISOString();
-
-
-
-    const client = await connectSignaling();
-    client.send("pairing:reject", {
-      session_id: incomingPair.session_id,
-      from_device_id: identity.device_id,
-      to_device_id: incomingPair.from_device_id,
-      reason: "cancelled",
-      message: "Pairing request cancelled by receiver",
-    });
-
-
-
-    // Clear local state
-    setIncomingPair(null);
-    setIncomingCode("");
-
   };
 
   const handleSyncWith = async (partnerDeviceId: string) => {
@@ -355,7 +274,7 @@ export const HouseholdView = React.memo(() => {
             });
           }
           if (state === 'failed' || state === 'disconnected') {
-            setErrorMessage("Connection lost. Try again.");
+            setErrorMessage("Connection lost. Please retry.");
             setIsSyncing(false);
             setConnectionType(null);
           }
@@ -372,14 +291,11 @@ export const HouseholdView = React.memo(() => {
           const chunkInfo = payload.chunk_info ?? { current: 1, total: 1 };
           const summary = await applySyncPayload(partnerDeviceId, payload, (progress) => {
             if (!progress) return;
-            // Only update progress at meaningful intervals to reduce re-renders
-            if (progress.received === progress.total_to_receive || progress.received % 10 === 0) {
-              setSyncProgress({
-                current: progress.received,
-                total: progress.total_to_receive,
-                chunks: { current: chunkInfo.current, total: chunkInfo.total },
-              });
-            }
+            setSyncProgress({
+              current: progress.received,
+              total: progress.total_to_receive,
+              chunks: { current: chunkInfo.current, total: chunkInfo.total },
+            });
           });
 
           totalReceived += summary.received;
@@ -387,11 +303,8 @@ export const HouseholdView = React.memo(() => {
             `Chunk ${chunkInfo.current}/${chunkInfo.total}: +${summary.received} items`
           );
 
-          // Batch: only refresh after the last chunk
-          if (chunkInfo.current === chunkInfo.total) {
-            await refreshSyncState();
-            await fetchHouseholdTransactions();
-          }
+          await refreshSyncState();
+          await fetchHouseholdTransactions();
         } catch (error) {
           const errorMsg = error instanceof Error ? error.message : "Failed to process sync payload";
           await recordSyncError(partnerDeviceId, errorMsg);
@@ -435,7 +348,7 @@ export const HouseholdView = React.memo(() => {
 
       window.setTimeout(() => {
         if (peerConnectionRef.current && peerConnectionRef.current.connectionState !== 'connected') {
-          setErrorMessage("Connection timed out. Partner may be offline.");
+          setErrorMessage("Connection timed out. Partner might be offline.");
           setIsSyncing(false);
         }
       }, 15000);
@@ -465,21 +378,13 @@ export const HouseholdView = React.memo(() => {
 
   useEffect(() => {
     void (async () => {
-
       const device = await getDeviceIdentity();
       setIdentity(device);
       setDisplayNameDraft(device.display_name);
-
-      // Initial data load
       await refreshSyncState();
       await fetchHouseholdTransactions();
-      await refreshNearby();
-
-
     })();
-  }, [fetchHouseholdTransactions, refreshNearby, refreshSyncState]);
-
-
+  }, []);
 
   useEffect(() => {
     if (refreshTrigger > 0) {
@@ -489,22 +394,26 @@ export const HouseholdView = React.memo(() => {
   }, [refreshTrigger, fetchHouseholdTransactions, refreshSyncState]);
 
   useEffect(() => {
-    if (!identity) {
-
-      return;
-    }
-
-    if (!client) {
-
-      return;
-    }
-
-
+    if (!identity) return;
+    const client = new SignalingClient(SIGNALING_URL);
     clientRef.current = client;
+    client.connect().then(() => {
+      client.send("presence:join", {
+        device_id: identity.device_id,
+        display_name: identity.display_name,
+      });
+    }).catch(() => setErrorMessage("Unable to connect to signaling server"));
 
-    // Signaling event handlers
-    const offPairRequest = () => { };
-
+    // Signaling event handlers (abbreviated for clarity, same logic as before)
+    const offPairRequest = client.on("pairing:request", (payload) => {
+      if (!payload || payload.to_device_id !== identityRef.current?.device_id) return;
+      setIncomingPair({
+        session_id: payload.session_id,
+        from_device_id: payload.from_device_id,
+        from_display_name: payload.from_display_name,
+      });
+      setIncomingCode("");
+    });
 
     const offPairAccept = client.on("pairing:accept", async (payload) => {
       if (!payload || !pairingKeyRef.current || payload.session_id !== pairingKeyRef.current.session_id) return;
@@ -525,61 +434,14 @@ export const HouseholdView = React.memo(() => {
     });
 
     const offPairReject = client.on("pairing:reject", (payload) => {
-      const timestamp = new Date().toISOString();
-
-      // Check if this is for incoming pair (Device B receiving rejection - shouldn't happen but just in case)
-      if (payload && incomingPairRef.current && payload.session_id === incomingPairRef.current.session_id) {
-
-        if (payload.reason === "wrong_code") {
-          setErrorMessage(payload.message || "Incorrect code. Please try again.");
-          setIncomingCode("");
-        } else if (payload.reason === "max_attempts" || payload.reason === "expired" || payload.reason === "cancelled") {
-
-          setErrorMessage(payload.message || "Pairing failed: " + (payload.message || "Session ended."));
-          setIncomingPair(null);
-          setIncomingCode("");
-        }
-        return;
-      }
-
-      // Check if this is for outgoing pair (Device A receiving rejection from Device B)
-      if (payload && pairingKeyRef.current && payload.session_id === pairingKeyRef.current.session_id) {
-
-
-
-        if (payload.reason === "cancelled") {
-
-          setErrorMessage("Pairing request was declined by the other device.");
-        } else if (payload.reason === "wrong_code") {
-          setErrorMessage(payload.message || "Incorrect code. Please try again.");
-        } else {
-          setErrorMessage(payload.message || "Pairing failed.");
-        }
-
-        // Clear outgoing pair state
-        pairingKeyRef.current = null;
-        setOutgoingPair(null);
-
-        return;
-      }
-    });
-
-    const offPairCancel = client.on("pairing:cancel", (payload) => {
-      const timestamp = new Date().toISOString();
-
-
-      if (!payload || !incomingPairRef.current) {
-
-        return;
-      }
-      if (payload.session_id === incomingPairRef.current.session_id) {
-
-
+      if (!payload || !incomingPairRef.current || payload.session_id !== incomingPairRef.current.session_id) return;
+      if (payload.reason === "wrong_code") {
+        setErrorMessage(payload.message || "Incorrect code. Please try again.");
+        setIncomingCode("");
+      } else if (payload.reason === "max_attempts" || payload.reason === "expired") {
+        setErrorMessage("Pairing failed: " + (payload.message || "Session ended."));
         setIncomingPair(null);
         setIncomingCode("");
-
-      } else {
-
       }
     });
 
@@ -680,13 +542,19 @@ export const HouseholdView = React.memo(() => {
 
     return () => {
       offPairRequest(); offPairAccept(); offPairConfirm(); offPairConfirmResponse();
-      offOffer(); offAnswer(); offCandidate(); offPairReject(); offPairCancel(); offError();
-      // Don't disconnect - client is shared with SignalingProvider
+      offOffer(); offAnswer(); offCandidate(); offPairReject(); offError();
+      client.disconnect();
       clientRef.current = null;
     };
   }, [identity?.device_id, refreshSyncState, fetchHouseholdTransactions]);
 
-
+  useEffect(() => {
+    if (!identity || !clientRef.current) return;
+    const interval = window.setInterval(() => {
+      clientRef.current?.send("presence:ping", { device_id: identity.device_id });
+    }, 20000);
+    return () => window.clearInterval(interval);
+  }, [identity]);
 
   useEffect(() => {
     if (conflictIds.length > 0) setShowConflicts(true);
@@ -707,31 +575,11 @@ export const HouseholdView = React.memo(() => {
 
   const visibleDevices = useMemo(() => {
     const map = new Map<string, { device_id: string; display_name: string; status: 'online' | 'offline' }>();
-
-
-
-    // Add online devices from discovery
-    nearbyDevices.forEach(d => {
-
-      map.set(d.device_id, { ...d, status: 'online' });
-    });
-
-    // Add paired devices (even if offline)
+    nearbyDevices.forEach(d => map.set(d.device_id, { ...d, status: 'online' }));
     pairings.forEach(p => {
-      const existing = map.get(p.partner_device_id);
-      if (existing) {
-
-        // Update status to online if already present
-        existing.status = 'online';
-      } else {
-
-        map.set(p.partner_device_id, { device_id: p.partner_device_id, display_name: p.partner_display_name, status: 'offline' });
-      }
+      if (!map.has(p.partner_device_id)) { map.set(p.partner_device_id, { device_id: p.partner_device_id, display_name: p.partner_display_name, status: 'offline' }); }
     });
-
-    const result = Array.from(map.values());
-
-    return result;
+    return Array.from(map.values());
   }, [nearbyDevices, pairings]);
 
   // UX Calculation: Totals for the "Monthly Pulse"
@@ -769,6 +617,7 @@ export const HouseholdView = React.memo(() => {
   };
 
   const handleForgetPartner = async (partnerDeviceId: string) => {
+    if (!confirm("Are you sure you want to forget this partner?")) return;
     await removePairing(partnerDeviceId);
     await refreshSyncState();
     await fetchHouseholdTransactions();
@@ -790,62 +639,208 @@ export const HouseholdView = React.memo(() => {
   // RENDER
   // ---------------------------------------------------------------------------
   return (
-    <div className="animate-fade-up space-y-4 pb-12 mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8">
+    <div className="animate-fade-up space-y-8 pb-12">
+      {/* HEADER: Identity & Actions */}
+      <header className="flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h2 className="kk-heading text-2xl tracking-tight">Household Sync</h2>
+          <p className="kk-meta mt-1">Unified ledger without cloud storage</p>
+        </div>
+
+        {/* Device Identity Pill */}
+        <div className="flex items-center self-start md:self-auto gap-2 rounded-full bg-white p-1.5 pr-4 shadow-sm border border-[var(--kk-smoke-heavy)]">
+          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--kk-ember)] text-white shadow-sm">
+            <Smartphone className="h-4 w-4" />
+          </div>
+          {isEditingName ? (
+            <div className="flex items-center gap-2">
+              <input
+                autoFocus
+                className="w-32 bg-transparent text-sm font-semibold text-[var(--kk-ink)] focus:outline-none"
+                value={displayNameDraft}
+                onChange={(e) => setDisplayNameDraft(e.target.value)}
+                onBlur={saveDisplayName}
+                onKeyDown={(e) => e.key === 'Enter' && saveDisplayName()}
+              />
+              <button onClick={saveDisplayName} className="text-[var(--kk-sage)] hover:bg-[var(--kk-sage-bg)] rounded-full p-1">
+                <Check className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setIsEditingName(true)}
+              className="group flex items-center gap-2 text-sm font-semibold text-[var(--kk-ink)] hover:text-[var(--kk-ember)] transition-colors"
+            >
+              <span>{identity?.display_name || "Unknown Device"}</span>
+              <Copy className="h-3 w-3 opacity-0 transition-opacity group-hover:opacity-100" />
+            </button>
+          )}
+        </div>
+      </header>
+
       {/* ERROR / ALERTS */}
       {errorMessage && (
-        <div className={`kk-badge-error flex w-full items-center gap-2 rounded-lg p-3 px-4 text-sm font-medium transition-opacity duration-500 ${isErrorFading ? 'opacity-0' : 'opacity-100'}`}>
+        <div className="kk-badge-error flex w-full items-center gap-2 rounded-lg p-3 px-4 text-sm font-medium animate-fade-up">
           <AlertCircle className="h-4 w-4" />
           {errorMessage}
           <button onClick={() => setErrorMessage(null)} className="ml-auto"><X className="h-4 w-4" /></button>
         </div>
       )}
 
-      {/* GRID LAYOUT - Content First, Sidebar Second */}
-      <div className="grid gap-4 lg:grid-cols-12 lg:gap-6">
+      {/* GRID LAYOUT */}
+      <div className="grid gap-6 md:grid-cols-12">
 
-        {/* PRIMARY COLUMN: Value Content (8 cols on desktop, first on mobile) */}
-        <div className="order-1 space-y-4 lg:order-1 lg:col-span-8">
+        {/* LEFT COLUMN: Status & Discovery (4 cols) */}
+        <div className="space-y-6 md:col-span-4 lg:col-span-3">
 
-          {/* PAIRING REQUESTS - Top Priority (requires immediate user action) */}
-          {incomingPair && (
-            <div className="overflow-hidden rounded-2xl border-2 border-[var(--kk-ember)]/20 bg-gradient-to-br from-white to-[var(--kk-cream)] shadow-lg animate-fade-up">
-              <div className="flex items-center gap-3 border-b border-[var(--kk-ember)]/10 bg-[var(--kk-ember)]/5 px-4 py-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-[var(--kk-ember)] to-[var(--kk-ember-deep)] text-white shadow-md">
-                  <Users className="h-5 w-5" />
+          {/* Main Status Card */}
+          <div className="kk-card relative overflow-hidden p-5">
+            <div className="absolute top-0 right-0 p-4 opacity-10">
+              <Shield className="h-24 w-24 -rotate-12" />
+            </div>
+
+            <div className="relative z-10">
+              <div className="kk-label mb-2">Sync Status</div>
+              <div className="flex items-center gap-2">
+                <div className={`h-2.5 w-2.5 rounded-full ${connectionState === 'connected' ? 'bg-[var(--kk-sage)] shadow-[0_0_8px_var(--kk-sage)]' :
+                  connectionState === 'connecting' ? 'bg-[var(--kk-saffron)] animate-pulse' :
+                    'bg-[var(--kk-ash)]'
+                  }`} />
+                <span className="font-semibold text-[var(--kk-ink)]">
+                  {connectionState === 'connected' ? "Connected" :
+                    connectionState === 'connecting' ? "Connecting..." :
+                      syncStatus}
+                </span>
+              </div>
+
+              {connectionType && (
+                <div className="mt-1 text-xs font-medium text-[var(--kk-ash)] flex items-center gap-1">
+                  <Wifi className="h-3 w-3" /> via {connectionType}
                 </div>
-                <div>
-                  <h3 className="font-bold text-[var(--kk-ink)]">New pairing request</h3>
-                  <p className="text-xs text-[var(--kk-ash)]">From <span className="font-medium text-[var(--kk-ink)]">{incomingPair.from_display_name}</span></p>
+              )}
+
+              <div className="mt-6">
+                {isSyncing ? (
+                  <button onClick={cancelSync} className="w-full kk-btn-secondary border-[var(--kk-danger-bg)] text-[var(--kk-danger)] hover:bg-[var(--kk-danger-bg)]">
+                    Cancel
+                  </button>
+                ) : pairings[0] ? (
+                  <button
+                    onClick={() => handleSyncWith(pairings[0].partner_device_id)}
+                    className="w-full kk-btn-primary"
+                    disabled={connectionState === 'connecting'}
+                  >
+                    <RefreshCw className={`mr-2 h-4 w-4 ${connectionState === 'connecting' ? 'animate-spin' : ''}`} />
+                    Sync Now
+                  </button>
+                ) : (
+                  <button
+                    onClick={refreshNearby}
+                    className="w-full kk-btn-primary"
+                    disabled={isSearching}
+                  >
+                    <Users className="mr-2 h-4 w-4" />
+                    Find Devices
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Device List */}
+          <div className="kk-surface p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <span className="kk-label">Nearby</span>
+              <button
+                onClick={refreshNearby}
+                disabled={isSearching}
+                className="rounded-full p-1.5 hover:bg-[var(--kk-smoke-heavy)] transition-colors"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 text-[var(--kk-ash)] ${isSearching ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              {visibleDevices.length === 0 ? (
+                <div className="py-6 text-center">
+                  <div className="mx-auto mb-2 flex h-10 w-10 items-center justify-center rounded-full bg-[var(--kk-smoke)] text-[var(--kk-ash)]">
+                    <WifiOff className="h-5 w-5" />
+                  </div>
+                  <p className="text-xs text-[var(--kk-ash)]">No devices found nearby</p>
+                </div>
+              ) : (
+                visibleDevices.map(device => {
+                  const isPaired = partnerIds.has(device.device_id);
+                  const isOnline = device.status === 'online';
+
+                  return (
+                    <div key={device.device_id}
+                      onClick={() => {
+                        if (!isOnline && !isPaired) return;
+                        if (isPaired) handleSyncWith(device.device_id);
+                        else preparePairing(device.device_id, device.display_name);
+                      }}
+                      className={`group relative flex cursor-pointer items-center gap-3 rounded-xl border border-transparent p-3 transition-all hover:border-[var(--kk-smoke-heavy)] hover:bg-[var(--kk-paper)] hover:shadow-sm ${activePartnerId === device.device_id ? 'bg-[var(--kk-mist)] border-[var(--kk-ember)]' : ''
+                        }`}
+                    >
+                      <div className="relative">
+                        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--kk-cream)] text-[var(--kk-ink)] font-bold text-xs">
+                          {device.display_name.charAt(0)}
+                        </div>
+                        <div className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-white ${isOnline ? 'bg-[var(--kk-sage)]' : 'bg-[var(--kk-ash)]'
+                          }`} />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-semibold text-[var(--kk-ink)]">
+                          {device.display_name}
+                        </div>
+                        <div className="text-[10px] uppercase tracking-wider text-[var(--kk-ash)]">
+                          {isPaired ? 'Paired' : isOnline ? 'Tap to Pair' : 'Offline'}
+                        </div>
+                      </div>
+                      {isPaired && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleForgetPartner(device.device_id); }}
+                          className="opacity-0 group-hover:opacity-100 p-1.5 text-[var(--kk-ash)] hover:text-[var(--kk-danger)] transition-all"
+                        >
+                          <XCircle className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* RIGHT COLUMN: Active Tasks & Ledger (8 cols) */}
+        <div className="space-y-6 md:col-span-8 lg:col-span-9">
+
+          {/* PAIRING REQUESTS (High Emphasis) */}
+          {incomingPair && (
+            <div className="kk-card-emphasis overflow-hidden rounded-2xl p-0 animate-fade-up">
+              <div className="bg-[var(--kk-ember)] px-6 py-4 text-white">
+                <div className="flex items-center gap-3">
+                  <div className="rounded-full bg-white/20 p-2"><Users className="h-5 w-5" /></div>
+                  <div>
+                    <h3 className="font-bold text-lg leading-tight">Pairing Request</h3>
+                    <p className="text-xs opacity-90">From {incomingPair.from_display_name}</p>
+                  </div>
                 </div>
               </div>
-              <div className="p-4 sm:p-5">
-                <p className="mb-4 text-center text-sm text-[var(--kk-ash)]">
-                  Enter the 4-digit code shown on their screen
-                </p>
-
-                <div className="mx-auto mb-4 max-w-xs">
+              <div className="p-6">
+                <p className="mb-4 text-sm text-[var(--kk-ash)]">Enter the 4-digit code displayed on their device to confirm secure connection.</p>
+                <div className="flex flex-wrap items-center gap-4">
                   <input
                     value={incomingCode}
                     onChange={(e) => setIncomingCode(e.target.value)}
                     placeholder="0000"
                     maxLength={4}
-                    className="w-full rounded-xl border-2 border-[var(--kk-smoke-heavy)] bg-white px-4 py-4 text-center text-3xl font-bold tracking-[0.5em] text-[var(--kk-ink)] transition-all focus:border-[var(--kk-ember)] focus:ring-4 focus:ring-[var(--kk-ember)]/10 focus:outline-none"
+                    className="w-32 rounded-xl border-2 border-[var(--kk-smoke-heavy)] px-4 py-3 text-center text-2xl font-bold tracking-[0.5em] text-[var(--kk-ink)] focus:border-[var(--kk-ember)] focus:outline-none"
                   />
-                </div>
-
-                <div className="flex flex-col gap-2 sm:flex-row sm:justify-center sm:gap-3">
-                  <button
-                    onClick={handleIncomingPairAccept}
-                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[var(--kk-ember)] to-[var(--kk-ember-deep)] px-6 py-3 text-sm font-semibold text-white shadow-md transition-all hover:shadow-lg sm:w-auto"
-                  >
-                    Verify & connect
-                    <ArrowRight className="h-4 w-4" />
-                  </button>
-                  <button
-                    onClick={handleIncomingPairCancel}
-                    className="w-full rounded-xl px-4 py-3 text-sm font-medium text-[var(--kk-ash)] transition-colors hover:bg-[var(--kk-smoke)] hover:text-[var(--kk-ink)] sm:w-auto"
-                  >
-                    Not now
+                  <button onClick={handleIncomingPairAccept} className="kk-btn-primary">
+                    Confirm Connection <ArrowRight className="ml-2 h-4 w-4" />
                   </button>
                 </div>
               </div>
@@ -853,58 +848,26 @@ export const HouseholdView = React.memo(() => {
           )}
 
           {outgoingPair && (
-            <div className="kk-card border-[var(--kk-ember)] p-5 text-center animate-fade-up">
-              <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-[var(--kk-cream)] text-[var(--kk-ember)]"><Shield className="h-6 w-6" /></div>
-              <h3 className="text-lg font-bold text-[var(--kk-ink)]">Pairing with {outgoingPair.to_display_name}</h3>
-              <p className="mx-auto mt-2 max-w-xs text-sm text-[var(--kk-ash)]">Ask them to type this code to confirm the secure link.</p>
+            <div className="kk-card border-[var(--kk-ember)] p-6 text-center animate-fade-up">
+              <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-[var(--kk-cream)] text-[var(--kk-ember)]">
+                <Shield className="h-6 w-6" />
+              </div>
+              <h3 className="text-lg font-bold text-[var(--kk-ink)]">Pair with {outgoingPair.to_display_name}</h3>
+              <p className="mx-auto mt-2 max-w-xs text-sm text-[var(--kk-ash)]">
+                Share this code with your partner to verify the connection.
+              </p>
               <div className="my-6 flex justify-center gap-3">
                 {outgoingPair.code.split('').map((digit, i) => (
-                  <div key={i} className="flex h-16 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-[var(--kk-ember)] to-[var(--kk-ember-deep)] text-3xl font-bold text-white shadow-lg">{digit}</div>
+                  <div key={i} className="flex h-16 w-12 items-center justify-center rounded-xl bg-[var(--kk-ink)] text-3xl font-bold text-white shadow-lg">
+                    {digit}
+                  </div>
                 ))}
               </div>
-              <button onClick={async () => { const toDeviceId = pairingKeyRef.current?.to_device_id; const sessionId = pairingKeyRef.current?.session_id; setOutgoingPair(null); pairingKeyRef.current = null; if (toDeviceId && sessionId && identityRef.current) { try { const client = await connectSignaling(); client.send("pairing:cancel", { session_id: sessionId, to_device_id: toDeviceId, from_device_id: identityRef.current?.device_id, from_display_name: identityRef.current?.display_name }); } catch { } } }} className="kk-btn-ghost text-xs">Cancel request</button>
+              <button onClick={() => { setOutgoingPair(null); pairingKeyRef.current = null; }} className="kk-btn-ghost text-xs">
+                Cancel Pairing
+              </button>
             </div>
           )}
-
-          {/* MONTH TO DATE - Hero Position */}
-          <div className="overflow-hidden rounded-2xl border border-[var(--kk-smoke)] bg-white p-5 shadow-md">
-            <div className="flex items-start justify-between">
-              <div>
-                <div className="mb-1 flex items-center gap-2">
-                  <div className="rounded-lg bg-[var(--kk-ember)]/10 p-1.5">
-                    <TrendingUp className="h-4 w-4 text-[var(--kk-ember)]" />
-                  </div>
-                  <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--kk-ash)]">Month to date</span>
-                </div>
-                <div className="text-3xl font-bold text-[var(--kk-ink)]">
-                  <span className="text-[var(--kk-ash)]">₹</span>{formatCurrency(totals.total)}
-                </div>
-              </div>
-              <div className="text-right">
-                <div className="text-[10px] uppercase tracking-wider text-[var(--kk-ash)]">Split</div>
-                <div className="mt-1 text-lg font-bold text-[var(--kk-ink)]">{Math.round(totals.youPct)}:{Math.round(100 - totals.youPct)}</div>
-              </div>
-            </div>
-
-            {/* Split Bar */}
-            <div className="mt-4 mb-3 flex h-3 w-full overflow-hidden rounded-full bg-[var(--kk-smoke-heavy)]">
-              <div className="h-full bg-gradient-to-r from-[var(--kk-ocean)] to-[#5b7dea] transition-all duration-700 ease-out" style={{ width: `${totals.youPct}%` }} />
-              <div className="h-full bg-gradient-to-r from-[var(--kk-ember)] to-[var(--kk-saffron)] transition-all duration-700 ease-out" style={{ width: `${100 - totals.youPct}%` }} />
-            </div>
-
-            <div className="flex justify-between text-xs">
-              <span className="flex items-center gap-2 text-[var(--kk-ink)]">
-                <div className="h-2.5 w-2.5 rounded-full bg-gradient-to-r from-[var(--kk-ocean)] to-[#5b7dea] shadow-sm" />
-                <span className="font-medium">You</span>
-                <span className="font-mono text-[var(--kk-ash)]">₹{formatCurrency(totals.you)}</span>
-              </span>
-              <span className="flex items-center gap-2 text-[var(--kk-ink)]">
-                <span className="font-mono text-[var(--kk-ash)]">₹{formatCurrency(totals.partner)}</span>
-                <span className="font-medium">Partner</span>
-                <div className="h-2.5 w-2.5 rounded-full bg-gradient-to-r from-[var(--kk-ember)] to-[var(--kk-saffron)] shadow-sm" />
-              </span>
-            </div>
-          </div>
 
           {/* CONFLICTS */}
           {showConflicts && conflictIds.length > 0 && (
@@ -913,8 +876,8 @@ export const HouseholdView = React.memo(() => {
                 <div className="flex items-center gap-3">
                   <AlertCircle className="h-5 w-5 text-amber-600" />
                   <div>
-                    <div className="font-bold text-amber-900">{conflictIds.length} sync conflict{conflictIds.length > 1 ? 's' : ''}</div>
-                    <div className="text-xs text-amber-700">Pick which version should stay in your ledger.</div>
+                    <div className="font-bold text-amber-900">{conflictIds.length} Sync Conflict{conflictIds.length > 1 ? 's' : ''}</div>
+                    <div className="text-xs text-amber-700">Different versions of transactions found.</div>
                   </div>
                 </div>
                 <button onClick={() => setShowConflicts(!showConflicts)} className="kk-btn-secondary text-xs h-8">
@@ -940,10 +903,10 @@ export const HouseholdView = React.memo(() => {
 
           {/* CONFLICT RESOLUTION MODAL/CARD */}
           {selectedConflict && conflictVersions.length >= 2 && (
-            <div className="kk-card p-5 animate-fade-up ring-4 ring-amber-100">
+            <div className="kk-card p-6 animate-fade-up ring-4 ring-amber-100">
               <h3 className="mb-4 font-bold text-lg flex items-center gap-2">
                 <AlertCircle className="h-5 w-5 text-[var(--kk-ember)]" />
-                Choose the version to keep
+                Choose version to keep
               </h3>
               <div className="grid gap-4 sm:grid-cols-2">
                 {conflictVersions.map((version, i) => (
@@ -974,7 +937,7 @@ export const HouseholdView = React.memo(() => {
           {syncProgress && (
             <div className="rounded-xl bg-[var(--kk-ink)] p-4 text-white shadow-lg animate-fade-up">
               <div className="mb-2 flex justify-between text-xs font-medium opacity-80">
-                <span>Sync in progress</span>
+                <span>Syncing...</span>
                 <span>{Math.round((syncProgress.current / syncProgress.total) * 100)}%</span>
               </div>
               <div className="h-2 w-full overflow-hidden rounded-full bg-white/20">
@@ -988,60 +951,65 @@ export const HouseholdView = React.memo(() => {
             </div>
           )}
 
-          {/* HOUSEHOLD LEDGER - Premium Redesign */}
-          <div className="overflow-hidden rounded-2xl border border-[var(--kk-smoke)] bg-white shadow-xl">
-            {/* Header with gradient accent */}
-            <div className="relative overflow-hidden border-b border-[var(--kk-smoke)] bg-gradient-to-r from-white via-white to-[var(--kk-cream)] px-6 py-5">
-              <div className="absolute -right-4 top-0 h-full w-32 bg-gradient-to-l from-[var(--kk-ember)]/5 to-transparent" />
+          {/* MONTHLY PULSE (Summary Card) - First Class UX Addition */}
+          <div className="kk-card overflow-hidden p-5">
+            <div className="mb-4 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <TrendingUp className="h-5 w-5 text-[var(--kk-ember)]" />
+                <h3 className="kk-label text-[var(--kk-ink)]">Monthly Pulse</h3>
+              </div>
+              <span className="font-mono text-lg font-bold text-[var(--kk-ink)]">₹{formatCurrency(totals.total)}</span>
+            </div>
 
-              <div className="relative z-10 sm:flex sm:items-center sm:justify-between">
-                <div className="mb-4 flex items-center gap-3 sm:mb-0">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-[var(--kk-ember)] to-[var(--kk-ember-deep)] text-white shadow-lg shadow-[var(--kk-ember)]/20">
-                    <Shield className="h-5 w-5" />
-                  </div>
-                  <div>
-                    <div className="text-lg font-bold text-[var(--kk-ink)]">Shared Ledger</div>
-                    <div className="text-xs text-[var(--kk-ash)]">
-                      {viewMode === 'recent' ? "Recent shared activity" : `${filteredTransactions.length} shared entries`}
-                    </div>
-                  </div>
-                </div>
+            {/* Split Bar */}
+            <div className="mb-2 flex h-4 w-full overflow-hidden rounded-full bg-[var(--kk-smoke-heavy)]">
+              <div className="h-full bg-[var(--kk-ocean)] transition-all duration-500" style={{ width: `${totals.youPct}%` }} />
+              <div className="h-full bg-[var(--kk-ember)] transition-all duration-500" style={{ width: `${100 - totals.youPct}%` }} />
+            </div>
 
-                {/* Filter Controls - Enhanced */}
-                <div className="flex rounded-xl border border-[var(--kk-smoke)] bg-[var(--kk-paper)] p-1">
-                  {(["all", "you", "partner"] as const).map((filter) => (
-                    <button
-                      key={filter}
-                      onClick={() => setHouseholdFilter(filter)}
-                      className={`rounded-lg px-4 py-2 text-xs font-bold uppercase tracking-wider transition-all ${householdFilter === filter
-                        ? 'bg-gradient-to-r from-[var(--kk-ember)] to-[var(--kk-ember-deep)] text-white shadow-md'
-                        : 'text-[var(--kk-ash)] hover:bg-white hover:text-[var(--kk-ink)]'
-                        }`}
-                    >
-                      {filter === "all" ? "All" : filter}
-                    </button>
-                  ))}
-                </div>
+            <div className="flex justify-between text-xs font-medium text-[var(--kk-ash)]">
+              <span className="flex items-center gap-1.5"><div className="h-2 w-2 rounded-full bg-[var(--kk-ocean)]" />You ({Math.round(totals.youPct)}%)</span>
+              <span className="flex items-center gap-1.5"><div className="h-2 w-2 rounded-full bg-[var(--kk-ember)]" />Partner ({Math.round(100 - totals.youPct)}%)</span>
+            </div>
+          </div>
+
+          {/* HOUSEHOLD LEDGER */}
+          <div className="kk-card min-h-[400px] overflow-hidden p-0">
+            <div className="border-b border-[var(--kk-smoke)] bg-[var(--kk-mist)] p-4 sm:flex sm:items-center sm:justify-between">
+              <div className="flex items-center gap-2 mb-3 sm:mb-0">
+                <Shield className="h-4 w-4 text-[var(--kk-ember)]" />
+                <h3 className="kk-label text-[var(--kk-ink)]">{viewMode === 'recent' ? "Recent Activity" : "Full History"}</h3>
+              </div>
+
+              {/* Filter Controls */}
+              <div className="flex rounded-lg bg-[var(--kk-smoke)] p-1">
+                {(["all", "you", "partner"] as const).map((filter) => (
+                  <button
+                    key={filter}
+                    onClick={() => setHouseholdFilter(filter)}
+                    className={`rounded-md px-3 py-1 text-xs font-semibold capitalize transition-all ${householdFilter === filter ? 'bg-white text-[var(--kk-ink)] shadow-sm' : 'text-[var(--kk-ash)] hover:text-[var(--kk-ink)]'
+                      }`}
+                  >
+                    {filter}
+                  </button>
+                ))}
               </div>
             </div>
 
-            <div>
+            <div className="divide-y divide-[var(--kk-smoke)]">
               {filteredTransactions.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-20 text-center">
-                  <div className="relative mb-6">
-                    <div className="absolute inset-0 rounded-full bg-[var(--kk-ember)]/10 blur-xl" />
-                    <div className="relative rounded-2xl bg-gradient-to-br from-[var(--kk-paper)] to-[var(--kk-cream)] p-5 shadow-lg">
-                      <Clock className="h-10 w-10 text-[var(--kk-ash)]" />
-                    </div>
+                <div className="flex flex-col items-center justify-center py-16 text-center">
+                  <div className="mb-4 rounded-full bg-[var(--kk-paper)] p-4">
+                    <Clock className="h-8 w-8 text-[var(--kk-smoke-heavy)]" />
                   </div>
-                  <h4 className="text-lg font-bold text-[var(--kk-ink)]">No shared activity yet</h4>
-                  <p className="mt-2 max-w-xs text-sm text-[var(--kk-ash)]">
-                    {viewMode === 'recent' ? "Sync with a paired device to see shared transactions here." : "Try a different filter to find entries."}
+                  <h4 className="font-semibold text-[var(--kk-ink)]">No transactions found</h4>
+                  <p className="mt-1 max-w-xs text-sm text-[var(--kk-ash)]">
+                    {viewMode === 'recent' ? "Sync with your partner to see shared activity." : "Try changing your filter settings."}
                   </p>
                 </div>
               ) : (
                 <>
-                  <div className="mt-5 space-y-3">
+                  <div className="space-y-1 p-2">
                     {filteredTransactions.map((tx, index) => {
                       const ownerLabel = tx.owner_device_id === identity?.device_id
                         ? "You"
@@ -1054,8 +1022,8 @@ export const HouseholdView = React.memo(() => {
                           index={index}
                           metaVariant="date"
                           hasEdit={false}
-                          onDelete={noopDelete}
-                          onOpenMobileSheet={noopMobileSheet}
+                          onDelete={() => undefined}
+                          onOpenMobileSheet={() => undefined}
                           formatCurrency={formatCurrency}
                           ownerLabel={ownerLabel}
                           showActions={false}
@@ -1066,25 +1034,24 @@ export const HouseholdView = React.memo(() => {
 
                   {/* View All Button (Only in Recent Mode) */}
                   {viewMode === 'recent' && householdTransactions.length > 5 && (
-                    <div className="border-t border-[var(--kk-smoke)] bg-[var(--kk-paper)] px-4 py-4">
+                    <div className="p-2">
                       <button
                         onClick={() => setViewMode('full')}
-                        className="group w-full flex items-center justify-center gap-2 rounded-xl border-2 border-dashed border-[var(--kk-smoke-heavy)] bg-white p-4 text-sm font-semibold text-[var(--kk-ink)] transition-all hover:border-[var(--kk-ember)] hover:bg-[var(--kk-ember)]/5"
+                        className="w-full flex items-center justify-center gap-2 rounded-xl border border-[var(--kk-smoke)] bg-white p-3 text-sm font-semibold text-[var(--kk-ink)] hover:border-[var(--kk-ember)] transition-colors"
                       >
-                        View all {householdTransactions.length} entries
-                        <ChevronRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
+                        View all {householdTransactions.length} transactions <ChevronRight className="h-4 w-4" />
                       </button>
                     </div>
                   )}
 
                   {/* Show Less Button (Only in Full Mode) */}
                   {viewMode === 'full' && (
-                    <div className="border-t border-[var(--kk-smoke)] px-4 py-4">
+                    <div className="p-2">
                       <button
                         onClick={() => setViewMode('recent')}
-                        className="w-full flex items-center justify-center gap-2 rounded-xl p-3 text-sm font-semibold text-[var(--kk-ash)] transition-colors hover:text-[var(--kk-ink)]"
+                        className="w-full flex items-center justify-center gap-2 rounded-xl p-3 text-sm font-semibold text-[var(--kk-ash)] hover:text-[var(--kk-ink)]"
                       >
-                        Show recent only
+                        Show less
                       </button>
                     </div>
                   )}
@@ -1093,211 +1060,7 @@ export const HouseholdView = React.memo(() => {
             </div>
           </div>
         </div>
-
-        {/* SIDEBAR: Device Management (4 cols on desktop, last on mobile) */}
-        <div className="order-2 lg:order-2 lg:col-span-4">
-          <div className="overflow-hidden rounded-2xl border border-[var(--kk-smoke)] bg-white shadow-md">
-            <div className="flex w-full items-center justify-between border-b border-[var(--kk-smoke)] bg-gradient-to-r from-[var(--kk-cream)] to-white px-4 py-3">
-              <div className="flex items-center gap-2">
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-[var(--kk-ember)] to-[var(--kk-ember-deep)] text-white shadow-sm">
-                  <Smartphone className="h-4 w-4" />
-                </div>
-                <div className="text-left">
-                  <div className="text-sm font-semibold text-[var(--kk-ink)]">Devices</div>
-                  <div className="flex items-center gap-1.5 text-[10px] text-[var(--kk-ash)]">
-                    {pairings.length > 0 ? (
-                      <>
-                        <div className={`h-1.5 w-1.5 rounded-full ${connectionState === 'connected' ? 'bg-[var(--kk-sage)]' : 'bg-[var(--kk-ash)]'}`} />
-                        <span>{pairings.length} paired</span>
-                        {connectionState === 'connected' && (
-                          <>
-                            <span className="text-[var(--kk-ash)]/60">·</span>
-                            <span>Connected</span>
-                          </>
-                        )}
-                      </>
-                    ) : (
-                      <span>Not paired</span>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="overflow-hidden">
-              <div className="p-4 space-y-4">
-                {/* This Device */}
-                <div className="rounded-xl border border-[var(--kk-smoke)] bg-[var(--kk-paper)] p-3">
-                  <div className="flex items-center gap-3">
-                    <div className="flex-1 min-w-0">
-                      <div className="text-[9px] font-bold uppercase tracking-[0.15em] text-[var(--kk-ash)]">This device</div>
-                      {isEditingName ? (
-                        <div className="flex items-center gap-2">
-                          <input
-                            autoFocus
-                            className="w-full bg-transparent text-sm font-semibold text-[var(--kk-ink)] focus:outline-none"
-                            value={displayNameDraft}
-                            onChange={(e) => setDisplayNameDraft(e.target.value)}
-                            onBlur={saveDisplayName}
-                            onKeyDown={(e) => e.key === 'Enter' && saveDisplayName()}
-                          />
-                          <button onClick={saveDisplayName} className="rounded-full p-1 text-[var(--kk-sage)] hover:bg-[var(--kk-sage-bg)]">
-                            <Check className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          onClick={() => setIsEditingName(true)}
-                          className="flex items-center gap-1 text-sm font-semibold text-[var(--kk-ink)] transition-colors hover:text-[var(--kk-ember)]"
-                        >
-                          {identity?.display_name || "Unknown Device"}
-                          <Pencil className="h-3 w-3 text-[var(--kk-ash)]" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Primary Action Button */}
-                {isSyncing ? (
-                  <button
-                    onClick={cancelSync}
-                    className="w-full flex items-center justify-center gap-2 rounded-xl border border-[var(--kk-danger)]/30 bg-[var(--kk-danger-bg)] px-4 py-3 text-sm font-semibold text-[var(--kk-danger)] transition-all hover:bg-[var(--kk-danger)]/10"
-                  >
-                    <X className="h-4 w-4" />
-                    Cancel Sync
-                  </button>
-                ) : pairings[0] ? (
-                  <button
-                    onClick={() => handleSyncWith(pairings[0].partner_device_id)}
-                    disabled={connectionState === 'connecting'}
-                    className="w-full flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[var(--kk-ember)] to-[var(--kk-ember-deep)] px-4 py-3 text-sm font-semibold text-white shadow-md transition-all hover:shadow-lg disabled:opacity-50"
-                  >
-                    <RefreshCw className={`h-4 w-4 ${connectionState === 'connecting' ? 'animate-spin' : ''}`} />
-                    {connectionState === 'connecting' ? 'Syncing...' : 'Sync Now'}
-                  </button>
-                ) : (
-                  <button
-                    onClick={refreshNearby}
-                    disabled={isSearching}
-                    className="w-full flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[var(--kk-ember)] to-[var(--kk-ember-deep)] px-4 py-3 text-sm font-semibold text-white shadow-md transition-all hover:shadow-lg disabled:opacity-50"
-                  >
-                    <Users className="h-4 w-4" />
-                    {isSearching ? 'Searching...' : 'Find Devices'}
-                  </button>
-                )}
-
-                {/* Nearby Devices */}
-                <div>
-                  <div className="mb-2 flex items-center justify-between">
-                    <span className="text-xs font-semibold text-[var(--kk-ink)]">Nearby</span>
-                    <button
-                      onClick={refreshNearby}
-                      disabled={isSearching}
-                      className="flex items-center gap-1 text-[10px] font-medium text-[var(--kk-ash)] hover:text-[var(--kk-ink)]"
-                    >
-                      <RefreshCw className={`h-3 w-3 ${isSearching ? 'animate-spin' : ''}`} />
-                      {isSearching ? 'Scanning' : 'Refresh'}
-                    </button>
-                  </div>
-
-                  <div className="space-y-2">
-                    {visibleDevices.length === 0 ? (
-                      <div className="py-6 text-center">
-                        <WifiOff className="mx-auto mb-2 h-5 w-5 text-[var(--kk-ash)]" />
-                        <p className="text-xs text-[var(--kk-ash)]">No devices nearby</p>
-                      </div>
-                    ) : (
-                      visibleDevices.map((device) => {
-                        const isPaired = partnerIds.has(device.device_id);
-                        const isOnline = device.status === 'online';
-
-                        return (
-                          <div
-                            key={device.device_id}
-                            onClick={() => {
-                              if (!isOnline && !isPaired) return;
-                              if (isPaired) handleSyncWith(device.device_id);
-                              else preparePairing(device.device_id, device.display_name);
-                            }}
-                            onMouseLeave={() => setConfirmForgetId(null)}
-                            className={`group flex cursor-pointer items-center gap-2 rounded-lg border p-2.5 transition-all ${activePartnerId === device.device_id
-                              ? 'border-[var(--kk-ember)] bg-[var(--kk-ember)]/5'
-                              : isPaired
-                                ? 'border-[var(--kk-sage)]/30 bg-[var(--kk-sage-bg)] hover:border-[var(--kk-sage)]/50'
-                                : 'border-transparent bg-[var(--kk-paper)] hover:bg-[var(--kk-cream)]'
-                              }`}
-                          >
-                            <div className="relative">
-                              <div className={`flex h-8 w-8 items-center justify-center rounded-lg text-xs font-bold ${isPaired ? 'bg-[var(--kk-sage)] text-white' : 'bg-[var(--kk-cream)] text-[var(--kk-ink)]'
-                                }`}>
-                                {device.display_name.charAt(0).toUpperCase()}
-                              </div>
-                              <div className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-white ${isOnline ? 'bg-[var(--kk-sage)]' : 'bg-[var(--kk-ash)]'
-                                }`} />
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-1.5">
-                                <span className="text-xs font-semibold text-[var(--kk-ink)] truncate">{device.display_name}</span>
-                                {isPaired && (
-                                  <span className="shrink-0 rounded-full bg-[var(--kk-sage-bg)] px-1.5 py-0.5 text-[8px] font-bold uppercase text-[var(--kk-sage)]">Paired</span>
-                                )}
-                              </div>
-                              <div className="text-[9px] text-[var(--kk-ash)]">
-                                {isPaired ? (isOnline ? 'Tap to sync' : 'Offline') : isOnline ? 'Tap to pair' : 'Offline'}
-                              </div>
-                            </div>
-                            {isPaired && (
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  if (confirmForgetId !== device.device_id) {
-                                    setConfirmForgetId(device.device_id);
-                                    if (confirmForgetTimeoutRef.current) {
-                                      clearTimeout(confirmForgetTimeoutRef.current);
-                                    }
-                                    confirmForgetTimeoutRef.current = setTimeout(() => {
-                                      setConfirmForgetId(null);
-                                    }, 4000);
-                                    return;
-                                  }
-                                  setConfirmForgetId(null);
-                                  if (confirmForgetTimeoutRef.current) {
-                                    clearTimeout(confirmForgetTimeoutRef.current);
-                                  }
-                                  handleForgetPartner(device.device_id);
-                                }}
-                                aria-label={
-                                  confirmForgetId === device.device_id
-                                    ? `Confirm remove ${device.display_name} partner`
-                                    : `Remove ${device.display_name} partner`
-                                }
-                                className={`kk-icon-btn kk-icon-btn-ghost h-8 w-8 sm:h-9 sm:w-9 sm:opacity-0 sm:group-hover:opacity-100 ${
-                                  confirmForgetId === device.device_id
-                                    ? "text-[var(--kk-ember)]"
-                                    : "kk-icon-btn-danger"
-                                }`}
-                              >
-                                {confirmForgetId === device.device_id ? (
-                                  <Check className="h-3.5 w-3.5" />
-                                ) : (
-                                  <X className="h-3.5 w-3.5" />
-                                )}
-                              </button>
-                            )}
-                          </div>
-                        );
-                      })
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
       </div>
     </div>
   );
-});
-
-HouseholdView.displayName = "HouseholdView";
+};
