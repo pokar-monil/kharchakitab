@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { startTransition, useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Listbox, Transition } from "@headlessui/react";
 import { X, Calendar, Clock, ChevronDown, Check } from "lucide-react";
@@ -81,49 +81,51 @@ export const RecurringEditModal = React.memo(({
   useEffect(() => {
     if (!isOpen) return;
 
-    // Edit mode: load from DB template
-    if (mode === "edit" && recurringTemplate) {
-      setName(recurringTemplate.item);
-      setAmountValue(recurringTemplate.amount.toString());
-      setCategory(recurringTemplate.category);
-      setPaymentMethod(recurringTemplate.paymentMethod);
-      setFrequency(recurringTemplate.recurring_frequency);
-      if (reactivatePreset) {
+    startTransition(() => {
+      // Edit mode: load from DB template
+      if (mode === "edit" && recurringTemplate) {
+        setName(recurringTemplate.item);
+        setAmountValue(recurringTemplate.amount.toString());
+        setCategory(recurringTemplate.category);
+        setPaymentMethod(recurringTemplate.paymentMethod);
+        setFrequency(recurringTemplate.recurring_frequency);
+        if (reactivatePreset) {
+          const now = Date.now();
+          setStartDate(toDateInputValue(now));
+          setEndDate(toDateInputValue(addOneYear(now)));
+        } else {
+          setStartDate(toDateInputValue(recurringTemplate.recurring_start_date));
+          setEndDate(toDateInputValue(recurringTemplate.recurring_end_date));
+        }
+        setReminderDays(recurringTemplate.recurring_reminder_days);
+        return;
+      }
+
+      // New mode with UI template (quick add)
+      if (template) {
+        setName(template.name);
+        setAmountValue(template.suggestedAmount?.toString() ?? "");
+        setCategory(template.category);
+        setPaymentMethod("upi");
+        setFrequency(template.suggestedFrequency);
         const now = Date.now();
         setStartDate(toDateInputValue(now));
         setEndDate(toDateInputValue(addOneYear(now)));
-      } else {
-        setStartDate(toDateInputValue(recurringTemplate.recurring_start_date));
-        setEndDate(toDateInputValue(recurringTemplate.recurring_end_date));
+        setReminderDays(5);
+        return;
       }
-      setReminderDays(recurringTemplate.recurring_reminder_days);
-      return;
-    }
 
-    // New mode with UI template (quick add)
-    if (template) {
-      setName(template.name);
-      setAmountValue(template.suggestedAmount?.toString() ?? "");
-      setCategory(template.category);
+      // New mode blank
+      setName("");
+      setAmountValue("");
+      setCategory("Bills");
       setPaymentMethod("upi");
-      setFrequency(template.suggestedFrequency);
+      setFrequency("monthly");
       const now = Date.now();
       setStartDate(toDateInputValue(now));
       setEndDate(toDateInputValue(addOneYear(now)));
       setReminderDays(5);
-      return;
-    }
-
-    // New mode blank
-    setName("");
-    setAmountValue("");
-    setCategory("Bills");
-    setPaymentMethod("upi");
-    setFrequency("monthly");
-    const now = Date.now();
-    setStartDate(toDateInputValue(now));
-    setEndDate(toDateInputValue(addOneYear(now)));
-    setReminderDays(5);
+    });
   }, [isOpen, mode, template, recurringTemplate, reactivatePreset]);
 
   useEscapeKey(isOpen, onClose);

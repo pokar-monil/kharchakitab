@@ -261,11 +261,8 @@ export const RecurringView = React.memo(({
     setAlertsEnabled(enabled);
     setAlertsStatus(getAlertsStatus(enabled, env));
     setAlertsLastSync(getAlertsLastSyncAt());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  useEffect(() => {
-    setAlertsStatus(getAlertsStatus(alertsEnabled, alertsEnv));
-  }, [alertsEnabled, alertsEnv]);
 
   useEffect(() => {
     const handleVisibility = () => {
@@ -444,7 +441,6 @@ export const RecurringView = React.memo(({
       <motion.div
         key={template._id}
         variants={cardVariants}
-        layout
         className={`group relative flex items-center justify-between gap-3 overflow-hidden kk-radius-md border p-4 pl-5 pr-4 transition-all ${cardTone.base} ${cardTone.hover} hover:shadow-[var(--kk-shadow-sm)]`}
       >
         <div className="flex flex-1 min-w-0 items-center gap-3">
@@ -777,9 +773,8 @@ export const RecurringView = React.memo(({
 
           <motion.div
             variants={containerVariants}
-            initial="hidden"
+            initial={false}
             animate="visible"
-            key={recurringFilter}
             className="grid gap-4"
           >
             <AnimatePresence mode="popLayout">

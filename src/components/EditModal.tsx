@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { startTransition, useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Listbox, Transition } from "@headlessui/react";
 import { Lock, ShieldCheck, X, ChevronDown, Check } from "lucide-react";
@@ -84,12 +84,14 @@ export const EditModal = React.memo(({
 
   useEffect(() => {
     if (isOpen) {
-      setAmountValue(amount.toString());
-      setItemValue(item);
-      setCategoryValue(category);
-      setPaymentValue(paymentMethod);
-      setDateValue(toDateInputValue(timestamp));
-      setIsPrivateValue(isPrivate);
+      startTransition(() => {
+        setAmountValue(amount.toString());
+        setItemValue(item);
+        setCategoryValue(category);
+        setPaymentValue(paymentMethod);
+        setDateValue(toDateInputValue(timestamp));
+        setIsPrivateValue(isPrivate);
+      });
     }
   }, [isOpen, amount, item, category, paymentMethod, timestamp, isPrivate]);
 

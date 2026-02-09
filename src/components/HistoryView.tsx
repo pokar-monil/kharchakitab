@@ -350,14 +350,16 @@ export const HistoryView = React.memo(({
       ].join("|");
       const cached = metricsCacheRef.current.get(cacheKey);
       if (cached) {
-        setRangeTransactions(cached.rangeTransactions);
-        setTrendMetrics(cached.trendMetrics);
-        setTrendRangeLabels(cached.trendRangeLabels);
-        // E: Populate list from cached metrics data
-        setItems(cached.rangeTransactions);
-        setHasMore(false);
-        setIsMetricsLoading(false);
-        setIsLoading(false);
+        // Batch all state updates in a single callback to avoid cascading re-renders
+        React.startTransition(() => {
+          setRangeTransactions(cached.rangeTransactions);
+          setTrendMetrics(cached.trendMetrics);
+          setTrendRangeLabels(cached.trendRangeLabels);
+          setItems(cached.rangeTransactions);
+          setHasMore(false);
+          setIsMetricsLoading(false);
+          setIsLoading(false);
+        });
         return;
       }
       setIsMetricsLoading(true);
@@ -512,11 +514,7 @@ export const HistoryView = React.memo(({
         const previousLabel = prevRange
           ? formatRangeLabel(prevRange.start, prevRange.end)
           : "";
-        setRangeTransactions(resolvedRangeTransactions);
-        // E: Populate list from metrics data (avoids redundant first-page fetch)
-        setItems(resolvedRangeTransactions);
-        setHasMore(false);
-        setTrendMetrics({
+        const computedTrendMetrics = {
           totalBase,
           totalPrev,
           delta,
@@ -526,9 +524,17 @@ export const HistoryView = React.memo(({
           prevCount,
           days,
           series,
-          bucket: useHourly ? "hour" : "day",
+          bucket: (useHourly ? "hour" : "day") as "hour" | "day",
+        };
+        const computedLabels = { current: currentLabel, previous: previousLabel };
+        // Batch all state updates to avoid cascading re-renders
+        React.startTransition(() => {
+          setRangeTransactions(resolvedRangeTransactions);
+          setItems(resolvedRangeTransactions);
+          setHasMore(false);
+          setTrendMetrics(computedTrendMetrics);
+          setTrendRangeLabels(computedLabels);
         });
-        setTrendRangeLabels({ current: currentLabel, previous: previousLabel });
         metricsCacheRef.current.set(cacheKey, {
           rangeTransactions: resolvedRangeTransactions,
           trendMetrics: {

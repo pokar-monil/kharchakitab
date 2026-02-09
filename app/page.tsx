@@ -95,6 +95,16 @@ const dataUrlToBlob = (dataUrl: string): Blob => {
   return new Blob([bytes], { type: mimeType });
 };
 
+// Module-scope animation objects — prevents framer-motion from restarting on re-render
+const orbEmberAnimate = { scale: [1, 1.1, 1], opacity: [0.4, 0.5, 0.4] };
+const orbEmberTransition = { duration: 8, repeat: Infinity, ease: "easeInOut" } as const;
+const orbSaffronAnimate = { scale: [1, 1.15, 1], opacity: [0.3, 0.4, 0.3] };
+const orbSaffronTransition = { duration: 10, repeat: Infinity, ease: "easeInOut", delay: 2 } as const;
+const headerInitial = { opacity: 0, y: -8 };
+const headerAnimate = { opacity: 1, y: 0 };
+const headerTransition = { duration: 0.4 };
+const headerTransitionDelay = { duration: 0.4, delay: 0.1 };
+
 const AppShell = () => {
   const { isRecording, setIsRecording, activeTab, setActiveTab, setIncomingPair } = useAppContext();
   // Initialize presence at app level for discoverability
@@ -103,7 +113,6 @@ const AppShell = () => {
   const [deletedTx, setDeletedTx] = useState<Transaction | null>(null);
   const [editedTx, setEditedTx] = useState<Transaction | null>(null);
   const [addedTx, setAddedTx] = useState<Transaction | null>(null);
-  const [isEditing, setIsEditing] = useState(false);
   const [editState, setEditState] = useState<{
     mode: "new" | "edit";
     id?: string;
@@ -115,6 +124,7 @@ const AppShell = () => {
     isPrivate?: boolean;
     isShared?: boolean;
   } | null>(null);
+  const isEditing = editState !== null;
   const [lastError, setLastError] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [pendingTransactions, setPendingTransactions] = useState<Transaction[]>([]);
@@ -124,11 +134,13 @@ const AppShell = () => {
   const [isAboutVisible, setIsAboutVisible] = useState(false);
   const [isReceiptProcessing, setIsReceiptProcessing] = useState(false);
   const [activeSection, setActiveSection] = useState<TabType>("summary");
-  const [isRecurringModalOpen, setIsRecurringModalOpen] = useState(false);
-  const [recurringModalMode, setRecurringModalMode] = useState<"new" | "edit">("new");
-  const [selectedTemplate, setSelectedTemplate] = useState<RecurringTemplate | null>(null);
-  const [selectedRecurringTemplate, setSelectedRecurringTemplate] = useState<Recurring_template | null>(null);
-  const [reactivatePreset, setReactivatePreset] = useState(false);
+  const [recurringModalState, setRecurringModalState] = useState<{
+    mode: "new" | "edit";
+    template: RecurringTemplate | null;
+    recurringTemplate: Recurring_template | null;
+    reactivatePreset: boolean;
+  } | null>(null);
+  const isRecurringModalOpen = recurringModalState !== null;
   // Show by default on localhost, or if PostHog is not enabled
   const [showHousehold, setShowHousehold] = useState(false);
   // Stable fallback timestamp for EditModal — only updates when editState changes
@@ -321,33 +333,34 @@ const AppShell = () => {
   }, []);
 
   const handleAddRecurring = useCallback((template?: RecurringTemplate) => {
-    setSelectedTemplate(template ?? null);
-    setSelectedRecurringTemplate(null);
-    setRecurringModalMode("new");
-    setIsRecurringModalOpen(true);
+    setRecurringModalState({
+      mode: "new",
+      template: template ?? null,
+      recurringTemplate: null,
+      reactivatePreset: false,
+    });
   }, []);
 
   const handleEditRecurring = useCallback((template: Recurring_template) => {
-    setSelectedRecurringTemplate(template);
-    setSelectedTemplate(null);
-    setRecurringModalMode("edit");
-    setReactivatePreset(false);
-    setIsRecurringModalOpen(true);
+    setRecurringModalState({
+      mode: "edit",
+      template: null,
+      recurringTemplate: template,
+      reactivatePreset: false,
+    });
   }, []);
 
   const handleReactivateRecurring = useCallback((template: Recurring_template) => {
-    setSelectedRecurringTemplate(template);
-    setSelectedTemplate(null);
-    setRecurringModalMode("edit");
-    setReactivatePreset(true);
-    setIsRecurringModalOpen(true);
+    setRecurringModalState({
+      mode: "edit",
+      template: null,
+      recurringTemplate: template,
+      reactivatePreset: true,
+    });
   }, []);
 
   const handleCloseRecurringModal = useCallback(() => {
-    setIsRecurringModalOpen(false);
-    setSelectedTemplate(null);
-    setSelectedRecurringTemplate(null);
-    setReactivatePreset(false);
+    setRecurringModalState(null);
   }, []);
 
   const handleSaveRecurring = useCallback(() => {
@@ -617,7 +630,6 @@ const AppShell = () => {
       isPrivate: tx.is_private ?? false,
       isShared,
     });
-    setIsEditing(true);
   }, []);
 
   const handleOpenHistory = useCallback(() => {
@@ -639,7 +651,6 @@ const AppShell = () => {
   );
 
   const handleCloseEdit = useCallback(() => {
-    setIsEditing(false);
     setEditState(null);
   }, []);
 
@@ -685,7 +696,6 @@ const AppShell = () => {
         });
       }
       setRefreshKey((prev) => prev + 1);
-      setIsEditing(false);
       setEditState(null);
     },
     [editState]
@@ -709,19 +719,13 @@ const AppShell = () => {
       >
         <motion.div
           className="kk-gradient-orb kk-gradient-orb-ember absolute -right-32 top-20 h-96 w-96"
-          animate={{
-            scale: [1, 1.1, 1],
-            opacity: [0.4, 0.5, 0.4],
-          }}
-          transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }}
+          animate={orbEmberAnimate}
+          transition={orbEmberTransition}
         />
         <motion.div
           className="kk-gradient-orb kk-gradient-orb-saffron absolute -left-20 top-1/3 h-80 w-80"
-          animate={{
-            scale: [1, 1.15, 1],
-            opacity: [0.3, 0.4, 0.3],
-          }}
-          transition={{ duration: 10, repeat: Infinity, ease: "easeInOut", delay: 2 }}
+          animate={orbSaffronAnimate}
+          transition={orbSaffronTransition}
         />
         <div className="kk-gradient-orb kk-gradient-orb-ink absolute bottom-20 left-1/2 h-[500px] w-[500px] -translate-x-1/2" />
       </div>
@@ -733,17 +737,17 @@ const AppShell = () => {
             <div aria-hidden />
             <div className="min-w-0 text-center">
               <motion.div
-                initial={{ opacity: 0, y: -8 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.4 }}
+                initial={headerInitial}
+                animate={headerAnimate}
+                transition={headerTransition}
                 className="kk-label"
               >
                 {todayLabel}
               </motion.div>
               <motion.h1
-                initial={{ opacity: 0, y: -8 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.4, delay: 0.1 }}
+                initial={headerInitial}
+                animate={headerAnimate}
+                transition={headerTransitionDelay}
                 className="mt-0.5 text-2xl font-bold font-[family:var(--font-display)] tracking-tight"
               >
                 Kharcha<span className="text-[var(--kk-ember)]">Kitab</span>
@@ -857,7 +861,6 @@ const AppShell = () => {
                                   item: "",
                                   category: "Food",
                                 });
-                                setIsEditing(true);
                                 posthog.capture("manual_entry_opened");
                               }}
                               className="kk-btn-secondary kk-btn-compact"
@@ -953,10 +956,10 @@ const AppShell = () => {
       {isRecurringModalOpen && (
         <RecurringEditModal
           isOpen={isRecurringModalOpen}
-          mode={recurringModalMode}
-          template={selectedTemplate}
-          recurringTemplate={selectedRecurringTemplate}
-          reactivatePreset={reactivatePreset}
+          mode={recurringModalState.mode}
+          template={recurringModalState.template}
+          recurringTemplate={recurringModalState.recurringTemplate}
+          reactivatePreset={recurringModalState.reactivatePreset}
           onClose={handleCloseRecurringModal}
           onSave={handleSaveRecurring}
         />

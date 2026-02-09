@@ -372,11 +372,14 @@ export const HouseholdView = React.memo(() => {
           const chunkInfo = payload.chunk_info ?? { current: 1, total: 1 };
           const summary = await applySyncPayload(partnerDeviceId, payload, (progress) => {
             if (!progress) return;
-            setSyncProgress({
-              current: progress.received,
-              total: progress.total_to_receive,
-              chunks: { current: chunkInfo.current, total: chunkInfo.total },
-            });
+            // Only update progress at meaningful intervals to reduce re-renders
+            if (progress.received === progress.total_to_receive || progress.received % 10 === 0) {
+              setSyncProgress({
+                current: progress.received,
+                total: progress.total_to_receive,
+                chunks: { current: chunkInfo.current, total: chunkInfo.total },
+              });
+            }
           });
 
           totalReceived += summary.received;
@@ -384,8 +387,11 @@ export const HouseholdView = React.memo(() => {
             `Chunk ${chunkInfo.current}/${chunkInfo.total}: +${summary.received} items`
           );
 
-          await refreshSyncState();
-          await fetchHouseholdTransactions();
+          // Batch: only refresh after the last chunk
+          if (chunkInfo.current === chunkInfo.total) {
+            await refreshSyncState();
+            await fetchHouseholdTransactions();
+          }
         } catch (error) {
           const errorMsg = error instanceof Error ? error.message : "Failed to process sync payload";
           await recordSyncError(partnerDeviceId, errorMsg);

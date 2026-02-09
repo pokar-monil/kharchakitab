@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { startTransition, useCallback, useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Listbox, Transition } from "@headlessui/react";
 import { ImageUp, Info, Wallet, ChevronDown, Check } from "lucide-react";
@@ -49,6 +49,58 @@ const isInRange = (timestamp: number, range: { start: number; end: number }) =>
 const isProcessingRow = (tx: Transaction) =>
   tx.item === "Processing…" || tx.item.startsWith("Processing ");
 
+const CompactBudgetRow = ({
+  title,
+  subtitle,
+  actionLabel,
+  onAction,
+  tone = "neutral",
+  onDismiss,
+}: {
+  title: string;
+  subtitle?: string;
+  actionLabel: string;
+  onAction: () => void;
+  tone?: "neutral" | "coachmark";
+  onDismiss?: () => void;
+}) => (
+  <div
+    className={`rounded-[var(--kk-radius-md)] border px-4 py-3 ${tone === "coachmark"
+      ? "border-[var(--kk-ember)]/30 bg-[var(--kk-ember)]/[0.06]"
+      : "border-[var(--kk-smoke)] bg-white/80"
+      }`}
+  >
+    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0 text-center sm:text-left sm:pr-2">
+        <div className="truncate text-sm font-medium text-[var(--kk-ink)]">
+          {title}
+        </div>
+        {subtitle && <div className="kk-meta mt-0.5">{subtitle}</div>}
+      </div>
+      <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:justify-end">
+        {onDismiss && (
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="kk-btn-ghost kk-btn-compact w-full sm:w-auto"
+            aria-label="Dismiss budget nudge"
+            title="Dismiss"
+          >
+            Not now
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={onAction}
+          className="kk-btn-secondary kk-btn-compact w-full sm:w-auto"
+        >
+          {actionLabel}
+        </button>
+      </div>
+    </div>
+  </div>
+);
+
 export const TransactionList = React.memo(({
   refreshKey,
   onViewAll,
@@ -79,7 +131,8 @@ export const TransactionList = React.memo(({
   const [budgetError, setBudgetError] = useState<string | null>(null);
   const [summaryView, setSummaryView] = useState<"today" | "month">("month");
   const [coachmarkDismissed, setCoachmarkDismissed] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
+  const hasLoadedOnce = React.useRef(false);
   const {
     isOpen: isMobileSheetOpen,
     activeId: mobileSheetTxId,
@@ -136,7 +189,7 @@ export const TransactionList = React.memo(({
   const reloadTransactions = useCallback((isActive?: () => boolean) => {
     if (!identity) return;
     const shouldUpdate = () => (isActive ? isActive() : true);
-    setIsLoading(true);
+    if (!hasLoadedOnce.current) setIsLoading(true);
     // Cap "activity" views to "now" so scheduled/future entries don't pollute spent/last-txns UI.
     // BUG-4 fix: Snap to end-of-today so the cache key stays stable across calls.
     const eod = new Date();
@@ -159,32 +212,39 @@ export const TransactionList = React.memo(({
         .then((items) => {
           if (!shouldUpdate()) return;
           const sorted = sortTransactions(items);
-          if (summaryView === "today") {
-            const todayItems = sorted.filter((tx) => isToday(tx.timestamp));
-            setPeriodTransactions(todayItems);
-            setTodayTransactions(todayItems);
-            const total = items
-              .filter((tx) => !isProcessingRow(tx))
-              .reduce((sum, tx) => sum + tx.amount, 0);
-            setMonthTotal((prev) => (prev === total ? prev : total));
-          } else {
-            setPeriodTransactions(sorted);
-            setTodayTransactions(sorted.filter((tx) => isToday(tx.timestamp)));
-          }
+          startTransition(() => {
+            if (summaryView === "today") {
+              const todayItems = sorted.filter((tx) => isToday(tx.timestamp));
+              setPeriodTransactions(todayItems);
+              setTodayTransactions(todayItems);
+              const total = items
+                .filter((tx) => !isProcessingRow(tx))
+                .reduce((sum, tx) => sum + tx.amount, 0);
+              setMonthTotal((prev) => (prev === total ? prev : total));
+            } else {
+              setPeriodTransactions(sorted);
+              setTodayTransactions(sorted.filter((tx) => isToday(tx.timestamp)));
+            }
+          });
         })
         .catch(() => {
           if (shouldUpdate()) {
-            setPeriodTransactions([]);
-            setTodayTransactions([]);
-            if (summaryView === "today") {
-              setMonthTotal((prev) => (prev === null ? prev : null));
-            }
+            startTransition(() => {
+              setPeriodTransactions([]);
+              setTodayTransactions([]);
+              if (summaryView === "today") {
+                setMonthTotal((prev) => (prev === null ? prev : null));
+              }
+            });
           }
         })
       : Promise.resolve();
 
     Promise.allSettled([recentPromise, rangePromise]).then(() => {
-      if (shouldUpdate()) setIsLoading(false);
+      if (shouldUpdate()) {
+        hasLoadedOnce.current = true;
+        setIsLoading(false);
+      }
     });
   }, [summaryView, identity]);
 
@@ -438,57 +498,7 @@ export const TransactionList = React.memo(({
     : `Remaining ₹${formatCurrency(pacingRemaining)}`}`;
 
 
-  const compactBudgetRow = ({
-    title,
-    subtitle,
-    actionLabel,
-    onAction,
-    tone = "neutral",
-    onDismiss,
-  }: {
-    title: string;
-    subtitle?: string;
-    actionLabel: string;
-    onAction: () => void;
-    tone?: "neutral" | "coachmark";
-    onDismiss?: () => void;
-  }) => (
-    <div
-      className={`rounded-[var(--kk-radius-md)] border px-4 py-3 ${tone === "coachmark"
-        ? "border-[var(--kk-ember)]/30 bg-[var(--kk-ember)]/[0.06]"
-        : "border-[var(--kk-smoke)] bg-white/80"
-        }`}
-    >
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="min-w-0 text-center sm:text-left sm:pr-2">
-          <div className="truncate text-sm font-medium text-[var(--kk-ink)]">
-            {title}
-          </div>
-          {subtitle && <div className="kk-meta mt-0.5">{subtitle}</div>}
-        </div>
-        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:justify-end">
-          {onDismiss && (
-            <button
-              type="button"
-              onClick={onDismiss}
-              className="kk-btn-ghost kk-btn-compact w-full sm:w-auto"
-              aria-label="Dismiss budget nudge"
-              title="Dismiss"
-            >
-              Not now
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={onAction}
-            className="kk-btn-secondary kk-btn-compact w-full sm:w-auto"
-          >
-            {actionLabel}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
+  // compactBudgetRow extracted to module scope (CompactBudgetRow)
 
   const budgetSurface = (
     <div className="kk-surface kk-shadow-sm px-4 py-4 sm:px-5 sm:py-4">
@@ -606,14 +616,16 @@ export const TransactionList = React.memo(({
     }
 
     if (!coachmarkEligible) return null;
-    return compactBudgetRow({
-      title: "Want a monthly budget?",
-      subtitle: "See monthly progress and pace limits",
-      actionLabel: "Add",
-      onAction: openBudgetEditor,
-      tone: "coachmark",
-      onDismiss: dismissCoachmark,
-    });
+    return (
+      <CompactBudgetRow
+        title="Want a monthly budget?"
+        subtitle="See monthly progress and pace limits"
+        actionLabel="Add"
+        onAction={openBudgetEditor}
+        tone="coachmark"
+        onDismiss={dismissCoachmark}
+      />
+    );
   })();
 
   const pacingBlock =
