@@ -71,7 +71,11 @@ interface QuickLogDB {
 
 export const DB_NAME = "QuickLogDB";
 export const DB_VERSION = 5; // Incremented for recurring_alerts store
+const MAX_CACHE_ENTRIES = 50;
 const queryCache = new Map<string, Transaction[]>();
+const cacheRanges = new Map<string, { start: number; end: number } | null>();
+const pendingRequests = new Map<string, Promise<Transaction[]>>();
+let cacheGeneration = 0;
 
 const getDb = () =>
   openDB<QuickLogDB>(DB_NAME, DB_VERSION, {
@@ -199,13 +203,40 @@ const cacheKeyFor = (parts: Array<string | number | boolean | undefined | null>)
   parts.map((part) => String(part ?? "")).join("|");
 
 const getCached = (key: string) => queryCache.get(key);
-const setCached = (key: string, value: Transaction[]) => {
+const setCached = (key: string, value: Transaction[], gen: number, range?: { start: number; end: number }) => {
+  // RACE-1: Don't cache if an invalidation happened after this read started
+  if (gen !== cacheGeneration) return value;
+  // LEAK-1: Evict oldest entry when cache is full
+  if (queryCache.size >= MAX_CACHE_ENTRIES) {
+    const firstKey = queryCache.keys().next().value as string;
+    queryCache.delete(firstKey);
+    cacheRanges.delete(firstKey);
+  }
   queryCache.set(key, value);
+  cacheRanges.set(key, range ?? null);
   return value;
 };
 
-const clearCache = () => {
-  queryCache.clear();
+const invalidateCache = (timestamp?: number) => {
+  cacheGeneration++;
+  if (timestamp === undefined) {
+    queryCache.clear();
+    cacheRanges.clear();
+    return;
+  }
+  for (const [key, range] of cacheRanges) {
+    // Always invalidate entries without a range (e.g. "recent 5" queries)
+    if (!range) {
+      queryCache.delete(key);
+      cacheRanges.delete(key);
+      continue;
+    }
+    // Only invalidate entries whose range contains the mutation timestamp
+    if (timestamp >= range.start && timestamp <= range.end) {
+      queryCache.delete(key);
+      cacheRanges.delete(key);
+    }
+  }
 };
 
 const isDeleted = (tx: Transaction) => Boolean(tx.deleted_at);
@@ -257,6 +288,7 @@ const backfillOwnerDeviceId = async (deviceId: string) => {
     cursor = await cursor.continue();
   }
   await tx.done;
+  invalidateCache();
 };
 
 const getSmartDeviceName = () => {
@@ -279,7 +311,12 @@ const getSmartDeviceName = () => {
   return browser ? `${device} (${browser})` : device;
 };
 
-export const getDeviceIdentity = async (): Promise<DeviceIdentity> => {
+let cachedIdentity: DeviceIdentity | null = null;
+let identityPromise: Promise<DeviceIdentity> | null = null;
+const ACTIVE_WRITE_INTERVAL = 5 * 60 * 1000; // Throttle last_active_at writes to once per 5 min
+let lastActiveWrite = 0;
+
+const resolveDeviceIdentity = async (): Promise<DeviceIdentity> => {
   // Fetch fingerprint data first to avoid IDB transaction auto-commit issues
   let visitorId: string | undefined;
   let smartName: string | undefined;
@@ -314,6 +351,7 @@ export const getDeviceIdentity = async (): Promise<DeviceIdentity> => {
     }
     await store.put(identity);
     await tx.done;
+    lastActiveWrite = now;
     return identity;
   }
 
@@ -345,6 +383,7 @@ export const getDeviceIdentity = async (): Promise<DeviceIdentity> => {
       };
       await store.put(restored);
       await tx.done;
+      lastActiveWrite = now;
       await backfillOwnerDeviceId(restored.device_id);
       return restored;
     }
@@ -361,18 +400,49 @@ export const getDeviceIdentity = async (): Promise<DeviceIdentity> => {
   };
   await store.put(identity);
   await tx.done;
+  lastActiveWrite = now;
   await backfillOwnerDeviceId(device_id);
   return identity;
 };
 
+export const getDeviceIdentity = async (): Promise<DeviceIdentity> => {
+  // Return cached identity immediately (covers 14 of 15 calls per session)
+  if (cachedIdentity) {
+    // Throttled last_active_at write — fire-and-forget, at most once per 5 min
+    const now = Date.now();
+    if (now - lastActiveWrite >= ACTIVE_WRITE_INTERVAL) {
+      lastActiveWrite = now;
+      getDb().then((db) =>
+        db.put("device_identity", { ...cachedIdentity!, last_active_at: now })
+      ).catch(() => {});
+    }
+    return cachedIdentity;
+  }
+
+  // Deduplicate concurrent first calls (e.g. multiple components mounting)
+  if (!identityPromise) {
+    identityPromise = resolveDeviceIdentity().then((identity) => {
+      cachedIdentity = identity;
+      identityPromise = null;
+      return identity;
+    }).catch((err) => {
+      identityPromise = null;
+      throw err;
+    });
+  }
+  return identityPromise;
+};
+
 export const setDeviceDisplayName = async (displayName: string) => {
   const identity = await getDeviceIdentity();
-  const db = await getDb();
-  await db.put("device_identity", {
+  const updated = {
     ...identity,
     display_name: displayName.trim() || identity.display_name,
     last_active_at: Date.now(),
-  });
+  };
+  const db = await getDb();
+  await db.put("device_identity", updated);
+  cachedIdentity = updated; // Keep cache in sync
 };
 
 export const recordTransactionVersion = async (
@@ -401,7 +471,7 @@ export const addTransaction = async (tx: Transaction): Promise<string> => {
   });
   await db.put("transactions", transaction);
   await recordTransactionVersion(transaction, identity.device_id);
-  clearCache();
+  invalidateCache(transaction.timestamp);
   return transaction.id;
 };
 
@@ -421,43 +491,65 @@ export const fetchTransactions = async (
 ): Promise<Transaction[]> => {
   const { range, limit, before, ownerId, includeDeleted = false } = options;
 
+  // F: Normalize – strip `before` when it has no effect on a ranged query
+  const effectiveBefore =
+    range && typeof before === "number" && before - 1 >= range.end
+      ? undefined
+      : before;
+
   const cacheKey = cacheKeyFor([
     "fetch",
     range?.start,
     range?.end,
     limit,
-    before,
+    effectiveBefore,
     ownerId,
     includeDeleted,
   ]);
   const cached = getCached(cacheKey);
   if (cached) return cached;
 
-  const db = await getDb();
-  const index = db.transaction("transactions").store.index("by-date");
+  // B: Return existing in-flight request for the same cache key
+  const pending = pendingRequests.get(cacheKey);
+  if (pending) return pending;
 
-  let keyRange: IDBKeyRange | null = null;
-  if (range) {
-    const upperBound =
-      typeof before === "number" ? Math.min(range.end, before - 1) : range.end;
-    if (upperBound < range.start) return [];
-    keyRange = IDBKeyRange.bound(range.start, upperBound);
-  } else if (typeof before === "number") {
-    keyRange = IDBKeyRange.upperBound(before - 1);
-  }
+  // RACE-1: Capture generation before async work starts
+  const gen = cacheGeneration;
 
-  const results = await collectTransactions(
-    index,
-    keyRange,
-    limit,
-    (tx) => {
-      if (!includeDeleted && isDeleted(tx)) return false;
-      if (ownerId && tx.owner_device_id !== ownerId) return false;
-      return true;
+  const promise = (async () => {
+    const db = await getDb();
+    const index = db.transaction("transactions").store.index("by-date");
+
+    let keyRange: IDBKeyRange | null = null;
+    if (range) {
+      const upperBound =
+        typeof effectiveBefore === "number"
+          ? Math.min(range.end, effectiveBefore - 1)
+          : range.end;
+      if (upperBound < range.start) return [];
+      keyRange = IDBKeyRange.bound(range.start, upperBound);
+    } else if (typeof effectiveBefore === "number") {
+      keyRange = IDBKeyRange.upperBound(effectiveBefore - 1);
     }
-  );
 
-  return setCached(cacheKey, results);
+    const results = await collectTransactions(
+      index,
+      keyRange,
+      limit,
+      (tx) => {
+        if (!includeDeleted && isDeleted(tx)) return false;
+        if (ownerId && tx.owner_device_id !== ownerId) return false;
+        return true;
+      }
+    );
+
+    return setCached(cacheKey, results, gen, range);
+  })();
+
+  pendingRequests.set(cacheKey, promise);
+  promise.finally(() => pendingRequests.delete(cacheKey));
+
+  return promise;
 };
 
 export const getTransactionsUpdatedSince = async (
@@ -515,7 +607,10 @@ export const updateTransaction = async (
       (await getDeviceIdentity()).device_id;
     await recordTransactionVersion(next, editorDeviceId);
   }
-  clearCache();
+  invalidateCache(existing.timestamp);
+  if (typeof updates.timestamp === "number" && updates.timestamp !== existing.timestamp) {
+    invalidateCache(updates.timestamp);
+  }
 };
 
 export const upsertTransactionRaw = async (tx: Transaction): Promise<void> => {
@@ -523,7 +618,10 @@ export const upsertTransactionRaw = async (tx: Transaction): Promise<void> => {
   const existing = await db.get("transactions", tx.id);
   const next = ensureDefaults({ ...(existing ?? {}), ...tx });
   await db.put("transactions", next);
-  clearCache();
+  if (existing && existing.timestamp !== tx.timestamp) {
+    invalidateCache(existing.timestamp);
+  }
+  invalidateCache(tx.timestamp);
 };
 
 const clearTransactionHistory = async (db: any, id: string) => {
@@ -568,7 +666,7 @@ export const deleteTransaction = async (id: string): Promise<void> => {
     // Wipe history anyway to save space
     await clearTransactionHistory(db, id);
   }
-  clearCache();
+  invalidateCache(existing.timestamp);
 };
 
 export const getPairings = async (): Promise<PairingRecord[]> => {
@@ -653,7 +751,7 @@ export const isTransactionShared = async (id: string): Promise<boolean> => {
 };
 
 export const clearCacheForSync = () => {
-  clearCache();
+  invalidateCache();
 };
 // At the end of the db.ts file - add these functions
 
@@ -697,7 +795,7 @@ export const createRecurringTemplate = async (templateData: Omit<Recurring_templ
     await db.put("transactions", tx);
   }
 
-  clearCache();
+  invalidateCache();
   return template._id;
 };
 
@@ -751,14 +849,14 @@ export const updateRecurringTemplate = async (
     await db.put("transactions", tx);
   }
 
-  clearCache();
+  invalidateCache();
 };
 
 export const deleteRecurringTemplate = async (id: string): Promise<void> => {
   const db = await getDb();
   await db.delete("recurring_templates", id);
   await deleteGeneratedTransactions(id, Date.now());
-  clearCache();
+  invalidateCache();
 };
 
 // ===== TRANSACTION GENERATION =====

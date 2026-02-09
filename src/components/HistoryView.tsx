@@ -276,10 +276,7 @@ export const HistoryView = React.memo(({
     syncSummaryView(mapFilterToSummaryView(filter));
   }, [filter, isOpen, syncSummaryView]);
 
-  useEffect(() => {
-    if (!isOpen) return;
-    void loadFirstPage();
-  }, [isOpen, loadFirstPage, refreshKey]);
+  // E: loadFirstPage effect removed — metrics effect populates items directly
 
   useEffect(() => {
     if (!isOpen) return;
@@ -356,10 +353,15 @@ export const HistoryView = React.memo(({
         setRangeTransactions(cached.rangeTransactions);
         setTrendMetrics(cached.trendMetrics);
         setTrendRangeLabels(cached.trendRangeLabels);
+        // E: Populate list from cached metrics data
+        setItems(cached.rangeTransactions);
+        setHasMore(false);
         setIsMetricsLoading(false);
+        setIsLoading(false);
         return;
       }
       setIsMetricsLoading(true);
+      setIsLoading(true);
       try {
         const base = changeRange;
         const MS_DAY = 24 * 60 * 60 * 1000;
@@ -511,6 +513,9 @@ export const HistoryView = React.memo(({
           ? formatRangeLabel(prevRange.start, prevRange.end)
           : "";
         setRangeTransactions(resolvedRangeTransactions);
+        // E: Populate list from metrics data (avoids redundant first-page fetch)
+        setItems(resolvedRangeTransactions);
+        setHasMore(false);
         setTrendMetrics({
           totalBase,
           totalPrev,
@@ -541,7 +546,10 @@ export const HistoryView = React.memo(({
           trendRangeLabels: { current: currentLabel, previous: previousLabel },
         });
       } finally {
-        if (active) setIsMetricsLoading(false);
+        if (active) {
+          setIsMetricsLoading(false);
+          setIsLoading(false);
+        }
       }
     };
     void loadMetrics();
@@ -550,6 +558,7 @@ export const HistoryView = React.memo(({
     };
   }, [
     changeRange,
+    currentDeviceId,
     filter,
     formatRangeLabel,
     isOpen,
@@ -694,10 +703,10 @@ export const HistoryView = React.memo(({
     if (!range || !currentDeviceId) return;
     setIsExporting(true);
     try {
-      const transactions = await fetchTransactions({
-        range: { start: range.start, end: range.end },
-        ownerId: currentDeviceId
-      });
+      // D: Use already-fetched rangeTransactions; fall back to fetch only while metrics is loading
+      const transactions = isMetricsLoading
+        ? await fetchTransactions({ range: { start: range.start, end: range.end }, ownerId: currentDeviceId })
+        : rangeTransactions;
       const headers = [
         "Date",
         "Amount",

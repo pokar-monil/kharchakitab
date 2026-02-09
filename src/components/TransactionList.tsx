@@ -138,7 +138,12 @@ export const TransactionList = React.memo(({
     const shouldUpdate = () => (isActive ? isActive() : true);
     setIsLoading(true);
     // Cap "activity" views to "now" so scheduled/future entries don't pollute spent/last-txns UI.
-    const beforeNow = Date.now() + 1;
+    // BUG-4 fix: Snap to end-of-today so the cache key stays stable across calls.
+    const eod = new Date();
+    eod.setHours(23, 59, 59, 999);
+    const beforeNow = eod.getTime() + 1;
+
+    // Always fetch recent 5 transactions
     const recentPromise = fetchTransactions({ limit: 5, ownerId: identity.device_id, before: beforeNow })
       .then((items) => {
         if (shouldUpdate()) setTransactions(sortTransactions(items));
@@ -147,16 +152,23 @@ export const TransactionList = React.memo(({
         if (shouldUpdate()) setTransactions([]);
       });
 
-    const range = getRangeForFilter(summaryView === "today" ? "today" : "month");
-    const rangePromise = range
-      ? fetchTransactions({ range: { start: range.start, end: range.end }, ownerId: identity.device_id, before: beforeNow })
+    // A: Always fetch month range; derive today in-memory when needed (saves 1 IDB call)
+    const monthRange = getRangeForFilter("month");
+    const rangePromise = monthRange
+      ? fetchTransactions({ range: { start: monthRange.start, end: monthRange.end }, ownerId: identity.device_id, before: beforeNow })
         .then((items) => {
           if (!shouldUpdate()) return;
           const sorted = sortTransactions(items);
-          setPeriodTransactions(sorted);
           if (summaryView === "today") {
-            setTodayTransactions(sorted);
+            const todayItems = sorted.filter((tx) => isToday(tx.timestamp));
+            setPeriodTransactions(todayItems);
+            setTodayTransactions(todayItems);
+            const total = items
+              .filter((tx) => !isProcessingRow(tx))
+              .reduce((sum, tx) => sum + tx.amount, 0);
+            setMonthTotal((prev) => (prev === total ? prev : total));
           } else {
+            setPeriodTransactions(sorted);
             setTodayTransactions(sorted.filter((tx) => isToday(tx.timestamp)));
           }
         })
@@ -164,32 +176,14 @@ export const TransactionList = React.memo(({
           if (shouldUpdate()) {
             setPeriodTransactions([]);
             setTodayTransactions([]);
+            if (summaryView === "today") {
+              setMonthTotal((prev) => (prev === null ? prev : null));
+            }
           }
         })
       : Promise.resolve();
 
-    const monthPromise =
-      summaryView === "today"
-        ? (() => {
-          const monthRange = getRangeForFilter("month");
-          if (!monthRange) return Promise.resolve([]);
-          return fetchTransactions({ range: { start: monthRange.start, end: monthRange.end }, ownerId: identity.device_id, before: beforeNow });
-        })()
-          .then((items) => {
-            if (!shouldUpdate()) return;
-            const total = items
-              .filter((tx) => !isProcessingRow(tx))
-              .reduce((sum, tx) => sum + tx.amount, 0);
-            setMonthTotal((prev) => (prev === total ? prev : total));
-          })
-          .catch(() => {
-            if (shouldUpdate()) setMonthTotal((prev) => (prev === null ? prev : null));
-          })
-        : null;
-
-    const promises = [recentPromise, rangePromise];
-    if (monthPromise) promises.push(monthPromise);
-    Promise.allSettled(promises).then(() => {
+    Promise.allSettled([recentPromise, rangePromise]).then(() => {
       if (shouldUpdate()) setIsLoading(false);
     });
   }, [summaryView, identity]);

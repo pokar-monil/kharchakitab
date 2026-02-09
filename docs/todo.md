@@ -4,9 +4,6 @@ P0
 P1
 - Bugs : mobile responsive/all cards compact
 - positioning copy
-- optimize fetchTransactions
-- optimize client side rendering uisng profiler.
-- check caching wherever possible(https://chatgpt.com/c/697f2a8c-0170-83a4-9f44-91964ba81983)
 - Competitor analysis (Play store reviews)
 
 P2
