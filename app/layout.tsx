@@ -54,18 +54,18 @@ export const metadata: Metadata = {
     locale: "en_IN",
     images: [
       {
-        url: "/icon.svg",
-        width: 512,
-        height: 512,
+        url: "/og-image.png",
+        width: 1200,
+        height: 630,
         alt: `${SITE_NAME} logo`,
       },
     ],
   },
   twitter: {
-    card: "summary",
+    card: "summary_large_image",
     title: defaultTitle,
     description: SITE_DESCRIPTION,
-    images: ["/icon.svg"],
+    images: ["/og-image.png"],
   },
   robots: {
     index: true,
@@ -77,8 +77,8 @@ export const metadata: Metadata = {
   },
   icons: {
     icon: "/icon.svg",
-    apple: "/icon.svg",
-    shortcut: "/icon.svg",
+    apple: "/icon-512.png",
+    shortcut: "/icon-192.png",
   },
   manifest: "/manifest.json",
   formatDetection: {
@@ -122,9 +122,9 @@ const structuredData = {
     "@type": "Organization",
     name: SITE_NAME,
     url: SITE_URL,
-    logo: `${SITE_URL}/icon.svg`,
+    logo: `${SITE_URL}/icon-512.png`,
   },
-  image: `${SITE_URL}/icon.svg`,
+  image: `${SITE_URL}/og-image.png`,
 };
 
 export default function RootLayout({
