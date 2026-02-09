@@ -55,7 +55,7 @@ const addOneYear = (timestamp: number) => {
   return date.getTime();
 };
 
-export const RecurringEditModal = ({
+export const RecurringEditModal = React.memo(({
   isOpen,
   mode,
   template,
@@ -438,4 +438,6 @@ export const RecurringEditModal = ({
       )}
     </AnimatePresence>
   );
-};
+});
+
+RecurringEditModal.displayName = "RecurringEditModal";

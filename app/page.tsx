@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { AppProvider, useAppContext } from "@/src/context/AppContext";
 import { SignalingProvider, useSignaling } from "@/src/context/SignalingContext";
@@ -131,6 +131,8 @@ const AppShell = () => {
   const [reactivatePreset, setReactivatePreset] = useState(false);
   // Show by default on localhost, or if PostHog is not enabled
   const [showHousehold, setShowHousehold] = useState(false);
+  // Stable fallback timestamp for EditModal — only updates when editState changes
+  const editTimestampFallback = useMemo(() => Date.now(), [editState]);
 
   const { client } = useSignaling();
   const identityRef = useRef<any>(null);
@@ -579,6 +581,18 @@ const AppShell = () => {
     await processAudioBlob(audioBlob);
   }, [audioRecorder]);
 
+  const onMicPress = useCallback(() => {
+    if (isRecording) {
+      void handleStopRecording();
+    } else {
+      void handleStartRecording();
+    }
+  }, [isRecording, handleStopRecording, handleStartRecording]);
+
+  const onReceiptUploadClick = useCallback(() => {
+    receiptInputRef.current?.click();
+  }, []);
+
   const [todayLabel, setTodayLabel] = useState("");
 
   useEffect(() => {
@@ -877,7 +891,7 @@ const AppShell = () => {
                     onEdit={openEdit}
                     onMobileSheetChange={setIsTxnSheetOpen}
                     onDeleted={handleTransactionDeleted}
-                    onReceiptUploadClick={() => receiptInputRef.current?.click()}
+                    onReceiptUploadClick={onReceiptUploadClick}
                     isReceiptProcessing={isReceiptProcessing}
                   />
                 </section>
@@ -906,7 +920,7 @@ const AppShell = () => {
           activeTab={activeSection}
           onTabChange={setActiveSection}
           isRecording={isRecording}
-          onMicPress={isRecording ? handleStopRecording : handleStartRecording}
+          onMicPress={onMicPress}
         />
       )}
       <input
@@ -917,42 +931,48 @@ const AppShell = () => {
         onChange={handleReceiptUpload}
       />
 
-      {/* Edit Modal */}
-      <EditModal
-        isOpen={isEditing}
-        mode={editState?.mode}
-        amount={editState?.amount ?? 0}
-        item={editState?.item ?? ""}
-        category={editState?.category ?? "Food"}
-        paymentMethod={editState?.paymentMethod ?? "cash"}
-        timestamp={editState?.timestamp ?? Date.now()}
-        isPrivate={editState?.isPrivate ?? false}
-        isShared={editState?.isShared ?? false}
-        showHousehold={showHousehold}
-        onClose={handleCloseEdit}
-        onSave={handleSaveEdit}
-      />
+      {/* Edit Modal — conditionally mounted */}
+      {isEditing && (
+        <EditModal
+          isOpen={isEditing}
+          mode={editState?.mode}
+          amount={editState?.amount ?? 0}
+          item={editState?.item ?? ""}
+          category={editState?.category ?? "Food"}
+          paymentMethod={editState?.paymentMethod ?? "cash"}
+          timestamp={editState?.timestamp ?? editTimestampFallback}
+          isPrivate={editState?.isPrivate ?? false}
+          isShared={editState?.isShared ?? false}
+          showHousehold={showHousehold}
+          onClose={handleCloseEdit}
+          onSave={handleSaveEdit}
+        />
+      )}
 
-      {/* Recurring Edit Modal */}
-      <RecurringEditModal
-        isOpen={isRecurringModalOpen}
-        mode={recurringModalMode}
-        template={selectedTemplate}
-        recurringTemplate={selectedRecurringTemplate}
-        reactivatePreset={reactivatePreset}
-        onClose={handleCloseRecurringModal}
-        onSave={handleSaveRecurring}
-      />
+      {/* Recurring Edit Modal — conditionally mounted */}
+      {isRecurringModalOpen && (
+        <RecurringEditModal
+          isOpen={isRecurringModalOpen}
+          mode={recurringModalMode}
+          template={selectedTemplate}
+          recurringTemplate={selectedRecurringTemplate}
+          reactivatePreset={reactivatePreset}
+          onClose={handleCloseRecurringModal}
+          onSave={handleSaveRecurring}
+        />
+      )}
 
-      {/* History View */}
-      <HistoryView
-        isOpen={isHistoryOpen}
-        onClose={handleCloseHistory}
-        onDeleted={handleHistoryDeleted}
-        refreshKey={refreshKey}
-        editedTx={editedTx}
-        onEdit={openEdit}
-      />
+      {/* History View — conditionally mounted */}
+      {isHistoryOpen && (
+        <HistoryView
+          isOpen={isHistoryOpen}
+          onClose={handleCloseHistory}
+          onDeleted={handleHistoryDeleted}
+          refreshKey={refreshKey}
+          editedTx={editedTx}
+          onEdit={openEdit}
+        />
+      )}
     </div>
   );
 };

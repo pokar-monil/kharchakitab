@@ -55,7 +55,7 @@ const sanitizeAmountInput = (value: string) => {
   return trimmedDecimals.length > 0 ? `${intPart}.${trimmedDecimals}` : intPart;
 };
 
-export const EditModal = ({
+export const EditModal = React.memo(({
   isOpen,
   mode = "edit",
   amount,
@@ -370,4 +370,6 @@ export const EditModal = ({
       )}
     </AnimatePresence>
   );
-};
+});
+
+EditModal.displayName = "EditModal";

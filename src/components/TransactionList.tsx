@@ -49,7 +49,7 @@ const isInRange = (timestamp: number, range: { start: number; end: number }) =>
 const isProcessingRow = (tx: Transaction) =>
   tx.item === "Processing…" || tx.item.startsWith("Processing ");
 
-export const TransactionList = ({
+export const TransactionList = React.memo(({
   refreshKey,
   onViewAll,
   onEdit,
@@ -99,12 +99,12 @@ export const TransactionList = ({
   const todayTransactionsRef = React.useRef<Transaction[]>([]);
   const periodTransactionsRef = React.useRef<Transaction[]>([]);
   const hasEdit = Boolean(onEdit);
-  const currentMonthKey = (() => {
+  const currentMonthKey = useMemo(() => {
     const now = new Date();
     const year = now.getFullYear();
     const month = String(now.getMonth() + 1).padStart(2, "0");
     return `${year}-${month}`;
-  })();
+  }, []);
 
   const { syncSummaryView } = useSummaryViewSync({
     parse: (value) => {
@@ -359,14 +359,14 @@ export const TransactionList = ({
   }, [activeBudget, hasBudget, monthToDateTotal, viewTotal]);
 
   const budgetLabel = "Monthly Budget";
-  const resetHintLabel = (() => {
+  const resetHintLabel = useMemo(() => {
     const nextMonth = new Date();
     nextMonth.setMonth(nextMonth.getMonth() + 1, 1);
     return `Resets on ${nextMonth.toLocaleDateString("en-IN", {
       month: "short",
       day: "numeric",
     })}`;
-  })();
+  }, []);
   const handleBudgetSave = () => {
     if (budgetDraft.trim() === "") {
       setBudgetError("Enter a positive number");
@@ -406,14 +406,14 @@ export const TransactionList = ({
 
   const isPacingView = summaryView !== "month";
   const pacingLabel = "Daily cap";
-  const daysLeftInMonth = (() => {
+  const daysLeftInMonth = useMemo(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const monthEnd = new Date(today.getFullYear(), today.getMonth() + 1, 0);
     monthEnd.setHours(0, 0, 0, 0);
     const MS_DAY = 24 * 60 * 60 * 1000;
     return Math.floor((monthEnd.getTime() - today.getTime()) / MS_DAY) + 1;
-  })();
+  }, []);
   const pacingSpent = viewTotal;
   const pacingTarget =
     hasBudget &&
@@ -949,4 +949,6 @@ export const TransactionList = ({
       />
     </div>
   );
-};
+});
+
+TransactionList.displayName = "TransactionList";

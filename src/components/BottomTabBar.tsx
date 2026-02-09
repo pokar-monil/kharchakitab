@@ -18,7 +18,10 @@ const tabs: { key: TabType; label: string; icon: React.ElementType }[] = [
   { key: "recurring", label: "Recurring", icon: RefreshCw },
 ];
 
-export const BottomTabBar = ({
+const leftTabs = tabs.slice(0, 1);
+const rightTabs = tabs.slice(1);
+
+export const BottomTabBar = React.memo(({
   activeTab,
   onTabChange,
   isRecording,
@@ -46,9 +49,6 @@ export const BottomTabBar = ({
     }
     onMicPress();
   };
-
-  const leftTabs = tabs.slice(0, 1);
-  const rightTabs = tabs.slice(1);
 
   return (
     <div className="kk-bottom-tab-bar">
@@ -187,4 +187,6 @@ export const BottomTabBar = ({
       })}
     </div>
   );
-};
+});
+
+BottomTabBar.displayName = "BottomTabBar";

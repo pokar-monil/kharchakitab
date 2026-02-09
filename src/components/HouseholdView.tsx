@@ -43,7 +43,10 @@ const generateCode = () => Math.floor(1000 + Math.random() * 9000).toString();
 const isProcessingRow = (tx: Transaction) =>
   tx.item === "Processing…" || tx.item.startsWith("Processing ");
 
-export const HouseholdView = () => {
+const noopDelete = () => undefined;
+const noopMobileSheet = () => undefined;
+
+export const HouseholdView = React.memo(() => {
   // ---------------------------------------------------------------------------
   // STATE & LOGIC
   // ---------------------------------------------------------------------------
@@ -1045,8 +1048,8 @@ export const HouseholdView = () => {
                           index={index}
                           metaVariant="date"
                           hasEdit={false}
-                          onDelete={() => undefined}
-                          onOpenMobileSheet={() => undefined}
+                          onDelete={noopDelete}
+                          onOpenMobileSheet={noopMobileSheet}
                           formatCurrency={formatCurrency}
                           ownerLabel={ownerLabel}
                           showActions={false}
@@ -1289,4 +1292,6 @@ export const HouseholdView = () => {
       </div>
     </div>
   );
-};
+});
+
+HouseholdView.displayName = "HouseholdView";

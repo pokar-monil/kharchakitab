@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useRef, useState, useCallback } from "react";
+import React, { createContext, useContext, useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { SIGNALING_URL } from "@/src/config/sync";
 import { SignalingClient } from "@/src/services/sync/signalingClient";
 import { getDeviceIdentity } from "@/src/db/db";
@@ -78,8 +78,20 @@ export const SignalingProvider = ({ children }: { children: React.ReactNode }) =
         };
     }, [connect, disconnect]);
 
+    const [client, setClient] = useState<SignalingClient | null>(null);
+
+    // Keep client state in sync with ref after connect/disconnect
+    useEffect(() => {
+        setClient(clientRef.current);
+    }, [isConnected]);
+
+    const value = useMemo<SignalingContextValue>(
+        () => ({ client, isConnected, error, reconnect: connect, disconnect }),
+        [client, isConnected, error, connect, disconnect]
+    );
+
     return (
-        <SignalingContext.Provider value={{ client: clientRef.current, isConnected, error, reconnect: connect, disconnect }}>
+        <SignalingContext.Provider value={value}>
             {children}
         </SignalingContext.Provider>
     );

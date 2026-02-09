@@ -58,6 +58,37 @@ interface RecurringViewProps {
   onMobileSheetChange?: (isOpen: boolean) => void;
 }
 
+const containerVariants = {
+  hidden: { opacity: 0 },
+  visible: {
+    opacity: 1,
+    transition: {
+      staggerChildren: 0.08,
+      delayChildren: 0.1,
+    },
+  },
+};
+
+const cardVariants = {
+  hidden: { opacity: 0, y: 20, scale: 0.95 },
+  visible: {
+    opacity: 1,
+    y: 0,
+    scale: 1,
+    transition: {
+      type: "spring" as const,
+      stiffness: 300,
+      damping: 24,
+    },
+  },
+  exit: {
+    opacity: 0,
+    y: -10,
+    scale: 0.95,
+    transition: { duration: 0.2 },
+  },
+};
+
 const formatDueDate = (timestamp: number): string => {
   const date = new Date(timestamp);
   const today = new Date();
@@ -105,7 +136,7 @@ const calculateMonthlyTotal = (templates: Recurring_template[]): number => {
   }, 0);
 };
 
-export const RecurringView = ({
+export const RecurringView = React.memo(({
   refreshKey,
   onAddRecurring,
   onEditRecurring,
@@ -141,7 +172,7 @@ export const RecurringView = ({
     return ids;
   }, [templates]);
 
-  const now = Date.now();
+  const now = useMemo(() => Date.now(), [templates]);
   const activeTemplates = useMemo(
     () => templates.filter((t) => now <= t.recurring_end_date),
     [templates, now]
@@ -296,15 +327,6 @@ export const RecurringView = ({
     }
   }, [recurringFilter, endedTemplates.length]);
 
-  useEffect(() => {
-    console.info("[recurring] filter", {
-      filter: recurringFilter,
-      total: templates.length,
-      active: activeTemplates.length,
-      ended: endedTemplates.length,
-      filtered: filteredTemplates.length,
-    });
-  }, [recurringFilter, templates.length, activeTemplates.length, endedTemplates.length, filteredTemplates.length]);
 
   const mergedTemplates = useMemo(() => {
     const sorted = [...filteredTemplates];
@@ -317,17 +339,6 @@ export const RecurringView = ({
     return sorted;
   }, [dueSoonTemplateIds, filteredTemplates]);
 
-  useEffect(() => {
-    console.info("[recurring] render-list", {
-      filter: recurringFilter,
-      merged: mergedTemplates.length,
-      items: mergedTemplates.map((t) => ({
-        id: t._id,
-        item: t.item,
-        ended: now > t.recurring_end_date,
-      })),
-    });
-  }, [recurringFilter, mergedTemplates, now]);
 
   const toggleGroup = (group: TemplateGroup) => {
     setExpandedGroups((prev) => {
@@ -398,37 +409,6 @@ export const RecurringView = ({
     setAlertsBusy(false);
   };
 
-  // Stagger animation variants
-  const containerVariants = {
-    hidden: { opacity: 0 },
-    visible: {
-      opacity: 1,
-      transition: {
-        staggerChildren: 0.08,
-        delayChildren: 0.1,
-      },
-    },
-  };
-
-  const cardVariants = {
-    hidden: { opacity: 0, y: 20, scale: 0.95 },
-    visible: {
-      opacity: 1,
-      y: 0,
-      scale: 1,
-      transition: {
-        type: "spring" as const,
-        stiffness: 300,
-        damping: 24,
-      },
-    },
-    exit: {
-      opacity: 0,
-      y: -10,
-      scale: 0.95,
-      transition: { duration: 0.2 },
-    },
-  };
 
   const renderCard = (
     template: Recurring_template,
@@ -1004,4 +984,6 @@ export const RecurringView = ({
       )}
     </div>
   );
-};
+});
+
+RecurringView.displayName = "RecurringView";

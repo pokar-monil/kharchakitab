@@ -24,11 +24,9 @@ export const AppProvider = ({ children }: { children: React.ReactNode }) => {
   const [activeTab, setActiveTabState] = useState<"personal" | "household">("personal");
   const [incomingPair, setIncomingPair] = useState<IncomingPair | null>(null);
 
-  // Wrap setActiveTab with logging
   const setActiveTab = useCallback((tab: "personal" | "household") => {
-
     setActiveTabState(tab);
-  }, [activeTab]);
+  }, []);
 
   const value = useMemo<AppContextValue>(
     () => ({

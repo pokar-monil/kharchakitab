@@ -53,7 +53,7 @@ const getInitialFilter = (): FilterKey => {
   return "month";
 };
 
-export const HistoryView = ({
+export const HistoryView = React.memo(({
   isOpen,
   onClose,
   onDeleted,
@@ -317,11 +317,7 @@ export const HistoryView = ({
     return () => window.clearTimeout(handle);
   }, [customEnd]);
 
-  const formatCurrency = useCallback(
-    (value: number, options: Intl.NumberFormatOptions = {}) =>
-      formatCurrencyUtil(value, options),
-    []
-  );
+  const formatCurrency = formatCurrencyUtil;
 
   const formatRangeLabel = useCallback((start: number, end: number) => {
     const startDate = new Date(start);
@@ -1112,4 +1108,6 @@ export const HistoryView = ({
       )}
     </AnimatePresence >
   );
-};
+});
+
+HistoryView.displayName = "HistoryView";

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { syncEvents } from "@/src/services/sync/syncEvents";
 
 /**
@@ -47,10 +47,10 @@ export const useSyncEvents = (partnerDeviceId?: string) => {
         };
     }, [partnerDeviceId]);
 
-    return {
+    return useMemo(() => ({
         syncInProgress,
         syncError,
         lastSyncTime,
-        refreshTrigger, // Components can use this in dependency arrays to auto-refresh
-    };
+        refreshTrigger,
+    }), [syncInProgress, syncError, lastSyncTime, refreshTrigger]);
 };
