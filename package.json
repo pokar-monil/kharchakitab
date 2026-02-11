@@ -8,7 +8,9 @@
     "start": "next start",
     "server": "tsx server.ts",
     "lint": "eslint",
-    "knip": "knip"
+    "knip": "knip",
+"remotion:preview": "remotion preview remotion/index.ts",
+    "remotion:render": "remotion render remotion/index.ts LaunchVideo out/launch-video.mp4"
   },
   "dependencies": {
     "@fingerprintjs/fingerprintjs": "^5.0.1",
@@ -30,6 +32,8 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@remotion/cli": "^4.0.421",
+    "@remotion/media": "^4.0.421",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^25.1.0",
     "@types/react": "^19",
@@ -39,6 +43,7 @@
     "eslint-config-next": "16.1.6",
     "knip": "^5.82.1",
     "postcss": "^8",
+    "remotion": "^4.0.421",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
