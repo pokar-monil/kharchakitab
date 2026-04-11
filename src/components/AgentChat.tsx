@@ -3,7 +3,7 @@ console.log("[AgentChat] v2.1 Loaded")
 
 import { useState, useRef, useEffect, useCallback } from "react"
 import { motion, AnimatePresence } from "framer-motion"
-import { X, Send, Check, XIcon, Sparkles, Mic, Volume2 } from "lucide-react"
+import { X, Send, Check, XIcon, Sparkles, Volume2 } from "lucide-react"
 import { RecordingPill } from "@/src/components/RecordingPill"
 import { buildSnapshot } from "@/src/lib/agent/snapshot"
 import { useStreamingSTT } from "@/src/hooks/useStreamingSTT"
