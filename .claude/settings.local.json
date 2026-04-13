@@ -3,7 +3,9 @@
     "allow": [
       "Bash(xargs grep:*)",
       "Bash(npm run:*)",
-      "Bash(tasklist /FI \"IMAGENAME eq node.exe\" /FO TABLE)"
+      "Bash(tasklist /FI \"IMAGENAME eq node.exe\" /FO TABLE)",
+      "Bash(npx tsc:*)",
+      "Bash(node:*)"
     ]
   }
 }
