@@ -811,8 +811,9 @@ export const RecurringView = React.memo(({
                     whileTap={{ scale: 0.99 }}
                     className="flex w-full items-center justify-between rounded-xl border border-[var(--kk-smoke)] bg-white/80 px-4 py-3 text-left transition-colors transition-shadow hover:border-[var(--kk-ember)]/30 hover:shadow-sm transform-gpu"
                   >
-                    <div className="text-sm font-semibold text-[var(--kk-ink)]">
-                      {category}
+                    <div className="flex items-center gap-2">
+                      <CategoryIcon category={category} className="h-4 w-4 text-[var(--kk-ash)]" />
+                      <span className="text-sm font-semibold text-[var(--kk-ink)]">{category}</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="rounded-full bg-[var(--kk-cream)] px-2 py-0.5 text-xs font-bold text-[var(--kk-ash)]">

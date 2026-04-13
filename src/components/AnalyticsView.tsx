@@ -22,7 +22,6 @@ import { TransactionRow } from "@/src/components/TransactionRow";
 import { TransactionActionSheet } from "@/src/components/TransactionActionSheet";
 import { useCurrency } from "@/src/hooks/useCurrency";
 import { useMobileSheet } from "@/src/hooks/useMobileSheet";
-import { useSummaryViewSync, SUMMARY_VIEW_KEY } from "@/src/hooks/useSummaryViewSync";
 import { HistoryFilters } from "@/src/components/Filters";
 import { ImportModal } from "@/src/components/ImportModal";
 import {
@@ -32,8 +31,6 @@ import {
 import posthog from "posthog-js";
 
 const HISTORY_PAGE_SIZE = 30;
-
-type SummaryView = "today" | "month";
 
 interface AnalyticsViewProps {
   isOpen: boolean;
@@ -45,16 +42,8 @@ interface AnalyticsViewProps {
   onImported?: () => void;
 }
 
-const mapFilterToSummaryView = (value: FilterKey): SummaryView =>
-  value === "today" ? "today" : "month";
 
 
-const getInitialFilter = (): FilterKey => {
-  if (typeof window === "undefined") return "month";
-  const stored = window.localStorage.getItem(SUMMARY_VIEW_KEY);
-  if (stored === "today" || stored === "month") return stored;
-  return "month";
-};
 
 export const AnalyticsView = React.memo(({
   isOpen,
@@ -66,7 +55,7 @@ export const AnalyticsView = React.memo(({
   onImported,
 }: AnalyticsViewProps) => {
   const { symbol: currencySymbol, formatCurrency: formatCurrencyUtil } = useCurrency();
-  const [filter, setFilter] = useState<FilterKey>(getInitialFilter);
+  const [filter, setFilter] = useState<FilterKey>("month");
   const [query, setQuery] = useState("");
   const [items, setItems] = useState<Transaction[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -81,27 +70,10 @@ export const AnalyticsView = React.memo(({
   // PERF-VIRTUAL: Ref for virtualized list container
   const virtualListRef = useRef<HTMLDivElement | null>(null);
   const listRequestRef = useRef(0);
-  const skipSummarySyncRef = useRef(false);
   const filterRef = useRef<FilterKey>(filter);
   useEffect(() => {
     filterRef.current = filter;
   }, [filter]);
-  const handleSummaryReceive = useCallback((value: SummaryView) => {
-    setFilter((prev) => {
-      if (prev === value) return prev;
-      skipSummarySyncRef.current = true;
-      return value;
-    });
-  }, []);
-  const { syncSummaryView } = useSummaryViewSync<SummaryView>({
-    enabled: isOpen,
-    listen: false,
-    parse: (value) =>
-      value === "today" || value === "month"
-        ? value
-        : null,
-    onReceive: handleSummaryReceive,
-  });
   const [isExporting, setIsExporting] = useState(false);
   const [isMetricsLoading, setIsMetricsLoading] = useState(false);
   const [metricsVersion, setMetricsVersion] = useState(0);
@@ -273,15 +245,7 @@ export const AnalyticsView = React.memo(({
     }
   }, [cursor, fetchPage, hasMore, isLoading]);
 
-  useEffect(() => {
-    if (!isOpen) return;
-    if (skipSummarySyncRef.current) {
-      skipSummarySyncRef.current = false;
-      return;
-    }
-    if (filter !== "today" && filter !== "month") return;
-    syncSummaryView(mapFilterToSummaryView(filter));
-  }, [filter, isOpen, syncSummaryView]);
+
 
   // E: loadFirstPage effect removed — metrics effect populates items directly
 

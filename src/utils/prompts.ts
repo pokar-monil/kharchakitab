@@ -46,7 +46,7 @@ Rules:
 
 Example:
 Input: {"yesterday":{"items":[{"name":"Chai","amount":300,"count":3},{"name":"Cigarette","amount":1000,"count":1}],"totalSpend":1300}}
-Output: {"message":"Chai x3 (₹300) + Cigarette ₹1000. Aaj ghar pe raho, bachat hogi. 😤","emoji":"😤"}
+Output: {"message":"Chai x3 (₹300) + Cigarette ₹1000. Aaj ghar pe raho, bachat hogi.","emoji":"😤"}
 
 Valid JSON only. Schema: {"message":"string","emoji":"single emoji"}`;
 
