@@ -4,7 +4,6 @@ import {
   Car,
   Fuel,
   ShoppingBag,
-  Home,
   Tv,
   Shield,
   Landmark,
@@ -14,15 +13,17 @@ import {
   HeartPulse,
   Film,
   Wallet,
+  Building2,
 } from "lucide-react";
 
 export const CATEGORY_OPTIONS = [
   { key: "Food", icon: Utensils },
   { key: "Travel", icon: Car },
+  { key: "Office Commute", icon: Car },
   { key: "Fuel", icon: Fuel },
   { key: "Shopping", icon: ShoppingBag },
   { key: "Bills", icon: ReceiptText },
-  { key: "Housing", icon: Home },
+  { key: "Rent", icon: Building2 },
   { key: "Subscriptions", icon: Tv },
   { key: "Insurance", icon: Shield },
   { key: "Financial", icon: Landmark },
@@ -37,19 +38,6 @@ export type CategoryKey = typeof CATEGORY_OPTIONS[number]["key"];
 
 export const CATEGORY_LIST: CategoryKey[] = CATEGORY_OPTIONS.map((option) => option.key);
 
-export const CATEGORY_ICON_MAP: Record<CategoryKey, React.ElementType> = {
-  Food: Utensils,
-  Travel: Car,
-  Fuel,
-  Shopping: ShoppingBag,
-  Bills: ReceiptText,
-  Housing: Home,
-  Subscriptions: Tv,
-  Insurance: Shield,
-  Financial: Landmark,
-  "Home Services": Sparkles,
-  Education: GraduationCap,
-  Health: HeartPulse,
-  Entertainment: Film,
-  Other: Wallet,
-};
+export const CATEGORY_ICON_MAP = Object.fromEntries(
+  CATEGORY_OPTIONS.map((o) => [o.key, o.icon])
+) as unknown as Record<CategoryKey, React.ElementType>;

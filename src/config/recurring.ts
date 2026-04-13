@@ -86,9 +86,8 @@ const RECURRING_TEMPLATES_BY_CATEGORY: Partial<Record<CategoryKey, TemplateEntry
     { id: "milkman", name: "Milk", suggestedFrequency: "monthly", icon: Droplets },
     { id: "laundry", name: "Laundry / Dhobi", suggestedFrequency: "monthly", icon: Sparkles },
   ],
-  Housing: [
+  Rent: [
     { id: "rent", name: "Rent", suggestedFrequency: "monthly", icon: Building2 },
-    { id: "society-maintenance", name: "Society Maintenance", suggestedFrequency: "monthly", icon: Building2 },
   ],
   Bills: [
     { id: "wifi", name: "WiFi / Broadband", suggestedFrequency: "monthly", icon: Wifi },
@@ -97,6 +96,7 @@ const RECURRING_TEMPLATES_BY_CATEGORY: Partial<Record<CategoryKey, TemplateEntry
     { id: "gas", name: "Gas / LPG", suggestedFrequency: "monthly", icon: Flame },
     { id: "dth", name: "DTH / Cable TV", suggestedFrequency: "monthly", icon: Satellite },
     { id: "water", name: "Water Bill", suggestedFrequency: "monthly", icon: Droplets },
+    { id: "vehicle-maintenance", name: "Vehicle Maintenance", suggestedFrequency: "yearly", icon: Car },
   ],
   Financial: [
     { id: "home-loan-emi", name: "Home Loan EMI", suggestedFrequency: "monthly", icon: Home },
