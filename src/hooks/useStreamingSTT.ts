@@ -130,7 +130,10 @@ export function useStreamingSTT({
   /** Send buffered audio chunks to Sarvam WebSocket */
   const sendChunks = useCallback(() => {
     const ws = wsRef.current
-    if (!ws || ws.readyState !== WebSocket.OPEN) return
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      chunkBufferRef.current = []
+      return
+    }
     const chunks = chunkBufferRef.current
     if (chunks.length === 0) return
 
