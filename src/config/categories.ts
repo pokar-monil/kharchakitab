@@ -15,6 +15,8 @@ import {
   Film,
   Wallet,
   Building2,
+  Bus,
+  Shirt,
 } from "lucide-react";
 
 export const CATEGORY_OPTIONS = [
@@ -22,9 +24,9 @@ export const CATEGORY_OPTIONS = [
   { key: "Online Ordering", icon: ShoppingCart },
   { key: "Eating out", icon: Utensils },
   { key: "Travel", icon: Car },
-  { key: "Office Commute", icon: Car },
+  { key: "Office Commute", icon: Bus },
   { key: "Fuel", icon: Fuel },
-  { key: "Shopping", icon: ShoppingBag },
+  { key: "Shopping", icon: Shirt },
   { key: "Bills", icon: ReceiptText },
   { key: "Rent", icon: Building2 },
   { key: "Subscriptions", icon: Tv },
