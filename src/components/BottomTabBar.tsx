@@ -4,7 +4,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { BarChart3, Mic, RefreshCw, ArrowUp, Check, Home, Keyboard } from "lucide-react";
+import { BarChart3, Mic, RefreshCw, ArrowUp, Check, Home, Keyboard, UserRound } from "lucide-react";
 import { RecordingPill } from "@/src/components/RecordingPill";
 import { EXAMPLES } from "@/src/components/RecordingStatus";
 import type { AppTab } from "@/src/context/NavigationContext";
@@ -37,6 +37,7 @@ const BASE_TABS: { key: TabType; label: string; icon: React.ElementType }[] = [
   { key: "summary", label: "Home", icon: Home },
   { key: "recurring", label: "Recurring", icon: RefreshCw },
   { key: "analytics", label: "Analytics", icon: BarChart3 },
+  { key: "profile", label: "Profile", icon: UserRound },
 ];
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -147,8 +148,8 @@ export const BottomTabBar = React.memo(({
 
   return (
     <>
-      {/* ── Unified Input Pill — hidden on analytics tab ── */}
-      <div className="kk-text-bar" aria-live="polite" aria-atomic="true" style={{ display: activeTab === "analytics" ? "none" : undefined }}>
+      {/* ── Unified Input Pill — hidden on non-entry tabs ── */}
+      <div className="kk-text-bar" aria-live="polite" aria-atomic="true" style={{ display: activeTab === "analytics" || activeTab === "profile" ? "none" : undefined }}>
         <AnimatePresence mode="wait" initial={false}>
           {(pillState === "recording" || pillState === "processing") && (
             <RecordingPill
