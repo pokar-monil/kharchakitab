@@ -48,34 +48,11 @@ export const FREQUENCY_LABEL_MAP: Record<Frequency, string> = {
   yearly: "Yearly",
 };
 
-export type TemplateGroup =
-  | "insurance"
-  | "subscriptions"
-  | "home_services"
-  | "utilities"
-  | "financial"
-  | "education"
-  | "other";
-
-export const TEMPLATE_GROUPS: {
-  key: TemplateGroup;
-  label: string;
-  description: string;
-}[] = [
-    { key: "subscriptions", label: "Subscriptions", description: "Streaming, gym, apps" },
-    { key: "insurance", label: "Insurance", description: "Health, life, vehicle coverage" },
-    { key: "home_services", label: "Home Services", description: "Cook, maid, driver" },
-    { key: "utilities", label: "Utilities", description: "Rent, bills, recharges" },
-    { key: "financial", label: "Financial", description: "EMI, SIP, loans" },
-    { key: "education", label: "Education", description: "School, tuition, courses" },
-  ];
-
 export interface RecurringTemplate {
   id: string;
   name: string;
   hindiName?: string;
   category: CategoryKey;
-  group: TemplateGroup;
   suggestedFrequency: Frequency;
   icon: LucideIcon;
   suggestedAmount?: number;
@@ -87,7 +64,6 @@ export const RECURRING_TEMPLATES: RecurringTemplate[] = [
     name: "Health Insurance",
     hindiName: "स्वास्थ्य बीमा",
     category: "Insurance",
-    group: "insurance",
     suggestedFrequency: "yearly",
     icon: HeartPulse,
   },
@@ -96,7 +72,6 @@ export const RECURRING_TEMPLATES: RecurringTemplate[] = [
     name: "Life Insurance",
     hindiName: "जीवन बीमा",
     category: "Insurance",
-    group: "insurance",
     suggestedFrequency: "yearly",
     icon: Shield,
   },
@@ -105,7 +80,6 @@ export const RECURRING_TEMPLATES: RecurringTemplate[] = [
     name: "Vehicle Insurance",
     hindiName: "वाहन बीमा",
     category: "Insurance",
-    group: "insurance",
     suggestedFrequency: "yearly",
     icon: Car,
   },
@@ -114,7 +88,6 @@ export const RECURRING_TEMPLATES: RecurringTemplate[] = [
     name: "Home Insurance",
     hindiName: "गृह बीमा",
     category: "Insurance",
-    group: "insurance",
     suggestedFrequency: "yearly",
     icon: Home,
   },
@@ -122,7 +95,6 @@ export const RECURRING_TEMPLATES: RecurringTemplate[] = [
     id: "netflix",
     name: "Netflix",
     category: "Entertainment",
-    group: "subscriptions",
     suggestedFrequency: "monthly",
     icon: Tv,
     suggestedAmount: 649,
@@ -131,7 +103,6 @@ export const RECURRING_TEMPLATES: RecurringTemplate[] = [
     id: "spotify",
     name: "Spotify",
     category: "Entertainment",
-    group: "subscriptions",
     suggestedFrequency: "monthly",
     icon: Music,
     suggestedAmount: 119,
@@ -140,7 +111,6 @@ export const RECURRING_TEMPLATES: RecurringTemplate[] = [
     id: "amazon-prime",
     name: "Amazon Prime",
     category: "Entertainment",
-    group: "subscriptions",
     suggestedFrequency: "yearly",
     icon: Film,
     suggestedAmount: 1499,
@@ -149,7 +119,6 @@ export const RECURRING_TEMPLATES: RecurringTemplate[] = [
     id: "hotstar",
     name: "Disney+ Hotstar",
     category: "Entertainment",
-    group: "subscriptions",
     suggestedFrequency: "yearly",
     icon: Tv,
     suggestedAmount: 899,
@@ -158,7 +127,6 @@ export const RECURRING_TEMPLATES: RecurringTemplate[] = [
     id: "youtube-premium",
     name: "YouTube Premium",
     category: "Entertainment",
-    group: "subscriptions",
     suggestedFrequency: "monthly",
     icon: Film,
     suggestedAmount: 129,
@@ -168,7 +136,6 @@ export const RECURRING_TEMPLATES: RecurringTemplate[] = [
     name: "Gym Membership",
     hindiName: "जिम",
     category: "Health",
-    group: "subscriptions",
     suggestedFrequency: "monthly",
     icon: Dumbbell,
   },
@@ -177,7 +144,6 @@ export const RECURRING_TEMPLATES: RecurringTemplate[] = [
     name: "Newspaper",
     hindiName: "अखबार",
     category: "Subscriptions",
-    group: "subscriptions",
     suggestedFrequency: "monthly",
     icon: Newspaper,
   },
@@ -186,7 +152,6 @@ export const RECURRING_TEMPLATES: RecurringTemplate[] = [
     name: "Cook",
     hindiName: "रसोइया",
     category: "Home Services",
-    group: "home_services",
     suggestedFrequency: "monthly",
     icon: CookingPot,
   },
@@ -195,7 +160,6 @@ export const RECURRING_TEMPLATES: RecurringTemplate[] = [
     name: "Maid / House Help",
     hindiName: "नौकरानी",
     category: "Home Services",
-    group: "home_services",
     suggestedFrequency: "monthly",
     icon: Sparkles,
   },
@@ -204,7 +168,6 @@ export const RECURRING_TEMPLATES: RecurringTemplate[] = [
     name: "Driver",
     hindiName: "ड्राइवर",
     category: "Home Services",
-    group: "home_services",
     suggestedFrequency: "monthly",
     icon: Car,
   },
@@ -213,7 +176,6 @@ export const RECURRING_TEMPLATES: RecurringTemplate[] = [
     name: "Milk",
     hindiName: "दूध",
     category: "Home Services",
-    group: "home_services",
     suggestedFrequency: "monthly",
     icon: Droplets,
   },
@@ -222,7 +184,6 @@ export const RECURRING_TEMPLATES: RecurringTemplate[] = [
     name: "Laundry / Dhobi",
     hindiName: "धोबी",
     category: "Home Services",
-    group: "home_services",
     suggestedFrequency: "monthly",
     icon: Sparkles,
   },
@@ -231,7 +192,6 @@ export const RECURRING_TEMPLATES: RecurringTemplate[] = [
     name: "Rent",
     hindiName: "किराया",
     category: "Housing",
-    group: "utilities",
     suggestedFrequency: "monthly",
     icon: Building2,
   },
@@ -240,7 +200,6 @@ export const RECURRING_TEMPLATES: RecurringTemplate[] = [
     name: "WiFi / Broadband",
     hindiName: "वाईफाई",
     category: "Utilities",
-    group: "utilities",
     suggestedFrequency: "monthly",
     icon: Wifi,
   },
@@ -249,7 +208,6 @@ export const RECURRING_TEMPLATES: RecurringTemplate[] = [
     name: "Mobile Recharge",
     hindiName: "मोबाइल रिचार्ज",
     category: "Utilities",
-    group: "utilities",
     suggestedFrequency: "monthly",
     icon: Smartphone,
   },
@@ -258,7 +216,6 @@ export const RECURRING_TEMPLATES: RecurringTemplate[] = [
     name: "Electricity Bill",
     hindiName: "बिजली बिल",
     category: "Utilities",
-    group: "utilities",
     suggestedFrequency: "monthly",
     icon: Zap,
   },
@@ -267,7 +224,6 @@ export const RECURRING_TEMPLATES: RecurringTemplate[] = [
     name: "Gas / LPG",
     hindiName: "गैस",
     category: "Utilities",
-    group: "utilities",
     suggestedFrequency: "monthly",
     icon: Flame,
   },
@@ -276,7 +232,6 @@ export const RECURRING_TEMPLATES: RecurringTemplate[] = [
     name: "DTH / Cable TV",
     hindiName: "डीटीएच",
     category: "Utilities",
-    group: "utilities",
     suggestedFrequency: "monthly",
     icon: Satellite,
   },
@@ -285,7 +240,6 @@ export const RECURRING_TEMPLATES: RecurringTemplate[] = [
     name: "Water Bill",
     hindiName: "पानी बिल",
     category: "Utilities",
-    group: "utilities",
     suggestedFrequency: "monthly",
     icon: Droplets,
   },
@@ -294,7 +248,6 @@ export const RECURRING_TEMPLATES: RecurringTemplate[] = [
     name: "Society Maintenance",
     hindiName: "सोसायटी मेंटेनेंस",
     category: "Housing",
-    group: "utilities",
     suggestedFrequency: "monthly",
     icon: Building2,
   },
@@ -303,7 +256,6 @@ export const RECURRING_TEMPLATES: RecurringTemplate[] = [
     name: "Home Loan EMI",
     hindiName: "होम लोन EMI",
     category: "Financial",
-    group: "financial",
     suggestedFrequency: "monthly",
     icon: Home,
   },
@@ -312,7 +264,6 @@ export const RECURRING_TEMPLATES: RecurringTemplate[] = [
     name: "Car Loan EMI",
     hindiName: "कार लोन EMI",
     category: "Financial",
-    group: "financial",
     suggestedFrequency: "monthly",
     icon: Car,
   },
@@ -321,7 +272,6 @@ export const RECURRING_TEMPLATES: RecurringTemplate[] = [
     name: "Personal Loan EMI",
     hindiName: "पर्सनल लोन EMI",
     category: "Financial",
-    group: "financial",
     suggestedFrequency: "monthly",
     icon: Landmark,
   },
@@ -330,7 +280,6 @@ export const RECURRING_TEMPLATES: RecurringTemplate[] = [
     name: "Credit Card Bill",
     hindiName: "क्रेडिट कार्ड बिल",
     category: "Financial",
-    group: "financial",
     suggestedFrequency: "monthly",
     icon: CreditCard,
   },
@@ -339,7 +288,6 @@ export const RECURRING_TEMPLATES: RecurringTemplate[] = [
     name: "SIP / Mutual Fund",
     hindiName: "SIP",
     category: "Financial",
-    group: "financial",
     suggestedFrequency: "monthly",
     icon: PiggyBank,
   },
@@ -348,7 +296,6 @@ export const RECURRING_TEMPLATES: RecurringTemplate[] = [
     name: "School Fees",
     hindiName: "स्कूल फीस",
     category: "Education",
-    group: "education",
     suggestedFrequency: "quarterly",
     icon: GraduationCap,
   },
@@ -357,7 +304,6 @@ export const RECURRING_TEMPLATES: RecurringTemplate[] = [
     name: "Tuition / Coaching",
     hindiName: "ट्यूशन",
     category: "Education",
-    group: "education",
     suggestedFrequency: "monthly",
     icon: GraduationCap,
   },
@@ -366,7 +312,6 @@ export const RECURRING_TEMPLATES: RecurringTemplate[] = [
     name: "Daycare / Creche",
     hindiName: "डेकेयर",
     category: "Education",
-    group: "education",
     suggestedFrequency: "monthly",
     icon: Baby,
   },

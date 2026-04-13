@@ -25,13 +25,12 @@ import {
 import { downloadICS, openGoogleCalendar, toICSFilename } from "@/src/utils/ics";
 import {
   RECURRING_TEMPLATES,
-  TEMPLATE_GROUPS,
   FREQUENCY_LABEL_MAP,
   getNextUpcomingDueDate,
   isDueSoon,
-  type TemplateGroup,
   type RecurringTemplate,
 } from "@/src/config/recurring";
+import type { CategoryKey } from "@/src/config/categories";
 import {
   getRecurringTemplates,
   deleteRecurringTemplate,
@@ -207,8 +206,8 @@ export const RecurringView = React.memo(({
 }: RecurringViewProps) => {
   const { symbol: currencySymbol, formatCurrency } = useCurrency();
   const [templates, setTemplates] = useState<Recurring_template[]>([]);
-  const [expandedGroups, setExpandedGroups] = useState<Set<TemplateGroup>>(
-    new Set(["subscriptions"])
+  const [expandedGroups, setExpandedGroups] = useState<Set<CategoryKey>>(
+    new Set(["Entertainment"])
   );
   const [isLoading, setIsLoading] = useState(true);
   const [actionSheetTemplate, setActionSheetTemplate] = useState<Recurring_template | null>(null);
@@ -348,7 +347,7 @@ export const RecurringView = React.memo(({
   const virtualItems = virtualizer.getVirtualItems();
 
 
-  const toggleGroup = (group: TemplateGroup) => {
+  const toggleGroup = (group: CategoryKey) => {
     setExpandedGroups((prev) => {
       const next = new Set(prev);
       if (next.has(group)) {
@@ -797,31 +796,23 @@ export const RecurringView = React.memo(({
             transition={{ duration: 0.3 }}
             className="space-y-5"
           >
-            {TEMPLATE_GROUPS.map((group) => {
-              const groupTemplates = RECURRING_TEMPLATES.filter(
-                (t) => t.group === group.key
-              );
-              const isOpen = expandedGroups.has(group.key);
-              const visibleTemplates = groupTemplates.filter(
-                (t) => !usedTemplateIds.has(t.id)
+            {Array.from(new Set(RECURRING_TEMPLATES.map((t) => t.category))).map((category) => {
+              const visibleTemplates = RECURRING_TEMPLATES.filter(
+                (t) => t.category === category && !usedTemplateIds.has(t.id)
               );
               if (visibleTemplates.length === 0) return null;
+              const isOpen = expandedGroups.has(category);
 
               return (
-                <div key={group.key} className="space-y-3">
+                <div key={category} className="space-y-3">
                   <motion.button
                     type="button"
-                    onClick={() => toggleGroup(group.key)}
+                    onClick={() => toggleGroup(category)}
                     whileTap={{ scale: 0.99 }}
                     className="flex w-full items-center justify-between rounded-xl border border-[var(--kk-smoke)] bg-white/80 px-4 py-3 text-left transition-colors transition-shadow hover:border-[var(--kk-ember)]/30 hover:shadow-sm transform-gpu"
                   >
-                    <div>
-                      <div className="text-sm font-semibold text-[var(--kk-ink)]">
-                        {group.label}
-                      </div>
-                      <div className="text-xs text-[var(--kk-ash)] mt-0.5">
-                        {group.description}
-                      </div>
+                    <div className="text-sm font-semibold text-[var(--kk-ink)]">
+                      {category}
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="rounded-full bg-[var(--kk-cream)] px-2 py-0.5 text-xs font-bold text-[var(--kk-ash)]">

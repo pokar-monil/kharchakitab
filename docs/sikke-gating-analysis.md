@@ -29,18 +29,12 @@ These are the product — gating them kills the app:
 
 ### 2. Nice-to-Have (Gatable)
 
-| Feature | User Want | Marginal Cost to Me |
-|---------|-----------|---------------------|
-| **PDF Reports** | For tax/accountant | None |
-| **Receipt Photo Storage** | Keep proof | Cloud storage |
-| **Advanced Analytics** | Year-over-year, custom dates | None |
-| **Multiple Budgets** | weekly/daily budgets | None |
-| **Goals/Savings Tracking** | "Save for vacation" | None |
-| **Investment Tracking** | Stocks/MF alongside | None |
-| **Tax Export** | 80C, 80D categories | None |
-| **Premium Apni Awaaz** | Deeper roasts/insights | API calls |
-| **Cloud Backup** | Restore on new phone | Server cost |
-| **Family Sync (3+ devices)** | Beyond couple | Complexity |
+| Feature | User Want | Marginal Cost to Me | Why Worth Paying |
+|---------|-----------|---------------------|------------------|
+| **Premium Apni Awaaz** | Deeper roasts/insights | API calls | Unique to us, differentiated |
+| **Cloud Backup** | ✅ Yes | Google Drive with secret phrase | Real utility, real pain point |
+| **Advanced Analytics** | Year-over-year, custom dates | None | More insights = more value |
+| **Receipt Photo Storage** | Keep proof | Cloud storage | Real storage cost |
 
 ---
 
@@ -60,14 +54,12 @@ These are the product — gating them kills the app:
 
 | Feature | Gate With | Rationale |
 |---------|-----------|------------|
-| **PDF Reports** | Sikke (100) | Zero cost to me, rewards logging |
 | **Advanced Analytics** | Sikke (200) | Zero cost, nice-to-have |
-| **Goals/Savings** | Sikke (150) | Zero cost, engagement driver |
-| **Tax Export** | Both (150 Sikke OR ₹20) | User choice |
+| | **Currently built:** Trend chart, category pie, pacing strip, vs previous period, owner filter, basic filters |
+| | **Not built (Advanced):** Year-over-year, multi-year trends, day-of-week analysis, category trends over 6-12 months, budget adherence over time, payment method trends, recurring vs one-time split, savings rate |
 | **Premium Apni Awaaz** | Both (200 Sikke OR ₹10/mo) | Higher API cost, subscription option |
-| **Receipt Photo Storage** | Money only (₹20/mo) | Real storage cost |
-| **Cloud Backup** | Money only (₹30/mo) | Real server cost |
-| **Family Sync (3+)** | Money (₹50/mo) | Complexity, not core |
+| **Receipt Photo Storage** | Sikke (150) | Same Google Drive approach as Cloud Backup, zero cost to me |
+| **Cloud Backup** | Sikke (200) | Google Drive + secret phrase, zero cost to me |
 
 ---
 
