@@ -1,0 +1,319 @@
+"use client";
+
+import React, { useCallback, useEffect, useState } from "react";
+import {
+  Bell,
+  Check,
+  ChevronRight,
+  Coffee,
+  Coins,
+  Pencil,
+  Share2,
+  Smartphone,
+  Users,
+  Volume2,
+} from "lucide-react";
+import posthog from "posthog-js";
+import { CurrencyToggle } from "@/src/components/CurrencyToggle";
+import { SoundToggle } from "@/src/components/SoundToggle";
+import { getDeviceIdentity, getPairings, setDeviceDisplayName } from "@/src/db/db";
+import { useSignaling } from "@/src/context/SignalingContext";
+import { SITE_URL } from "@/src/config/site";
+import type { DeviceIdentity } from "@/src/types";
+
+const SectionHeader = ({ children }: { children: React.ReactNode }) => (
+  <div
+    className="kk-label pt-1 pb-0.5"
+    style={{ fontSize: "9px", letterSpacing: "0.2em" }}
+  >
+    {children}
+  </div>
+);
+
+const SectionDivider = () => (
+  <div
+    className="my-2"
+    style={{
+      height: "1px",
+      background:
+        "linear-gradient(90deg, transparent, var(--kk-smoke-heavy), transparent)",
+    }}
+  />
+);
+
+const SettingRow = ({
+  icon,
+  label,
+  description,
+  children,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  description?: string;
+  children: React.ReactNode;
+}) => (
+  <div className="flex items-center justify-between gap-3 rounded-[var(--kk-radius-md)] bg-white/80 px-4 py-3 shadow-sm">
+    <div className="flex items-center gap-3 min-w-0">
+      <div
+        className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-[var(--kk-cream)]"
+        style={{ color: "var(--kk-ash)" }}
+      >
+        {icon}
+      </div>
+      <div className="min-w-0">
+        <p className="text-sm font-semibold text-[var(--kk-ink)]">{label}</p>
+        {description && (
+          <p className="mt-0.5 text-xs leading-relaxed text-[var(--kk-ash)]">
+            {description}
+          </p>
+        )}
+      </div>
+    </div>
+    <div className="flex-shrink-0">{children}</div>
+  </div>
+);
+
+const ActionRow = ({
+  icon,
+  label,
+  description,
+  onClick,
+  trailing = <ChevronRight className="h-4 w-4 text-[var(--kk-ash)]" />,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  description?: string;
+  onClick?: () => void;
+  trailing?: React.ReactNode;
+}) => (
+  <button
+    type="button"
+    onClick={onClick}
+    className="flex w-full items-center justify-between gap-3 rounded-[var(--kk-radius-md)] bg-white/80 px-4 py-3 text-left shadow-sm transition-transform active:scale-[0.99]"
+  >
+    <div className="flex items-center gap-3 min-w-0">
+      <div
+        className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-[var(--kk-cream)]"
+        style={{ color: "var(--kk-ash)" }}
+      >
+        {icon}
+      </div>
+      <div className="min-w-0">
+        <p className="text-sm font-semibold text-[var(--kk-ink)]">{label}</p>
+        {description && (
+          <p className="mt-0.5 text-xs leading-relaxed text-[var(--kk-ash)]">
+            {description}
+          </p>
+        )}
+      </div>
+    </div>
+    <div className="flex-shrink-0">{trailing}</div>
+  </button>
+);
+
+const DeviceNameRow = React.memo(() => {
+  const [identity, setIdentity] = useState<DeviceIdentity | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const { refreshPresence, client } = useSignaling();
+
+  useEffect(() => {
+    void getDeviceIdentity().then((device) => {
+      setIdentity(device);
+      setDraft(device.display_name);
+    });
+  }, []);
+
+  const save = useCallback(async () => {
+    if (!draft.trim()) return;
+    const newName = draft.trim();
+    await setDeviceDisplayName(newName);
+    posthog.capture("display_name_changed");
+    await refreshPresence(newName);
+
+    const pairings = await getPairings();
+    if (client && pairings.length > 0) {
+      const latestIdentity = await getDeviceIdentity();
+      for (const pairing of pairings) {
+        client.send("pairing:name_changed", {
+          from_device_id: latestIdentity.device_id,
+          to_device_id: pairing.partner_device_id,
+          new_display_name: newName,
+        });
+      }
+    }
+
+    const updated = await getDeviceIdentity();
+    setIdentity(updated);
+    setDraft(updated.display_name);
+    setIsEditing(false);
+  }, [client, draft, refreshPresence]);
+
+  return (
+    <SettingRow
+      icon={<Smartphone className="h-4 w-4" />}
+      label="Your Name"
+      description="Shown when you pair and sync across devices."
+    >
+      {isEditing ? (
+        <div className="flex items-center gap-2">
+          <input
+            autoFocus
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onBlur={save}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void save();
+            }}
+            className="w-28 rounded-full bg-[var(--kk-paper)] px-3 py-1.5 text-sm font-semibold text-[var(--kk-ink)] focus:outline-none"
+          />
+          <button
+            type="button"
+            onClick={() => void save()}
+            className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--kk-sage-bg)] text-[var(--kk-sage)]"
+            aria-label="Save your name"
+          >
+            <Check className="h-4 w-4" />
+          </button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setIsEditing(true)}
+          className="flex max-w-[11rem] items-center gap-1.5 text-sm font-semibold text-[var(--kk-ink)]"
+        >
+          <span className="truncate">{identity?.display_name || "You"}</span>
+          <Pencil className="h-3.5 w-3.5 text-[var(--kk-ash)]" />
+        </button>
+      )}
+    </SettingRow>
+  );
+});
+
+DeviceNameRow.displayName = "DeviceNameRow";
+
+interface ProfileViewProps {
+  onOpenSync: () => void;
+  onOpenNotifications: () => void;
+}
+
+export const ProfileView = React.memo(({ onOpenSync, onOpenNotifications }: ProfileViewProps) => {
+  const [shareMessage, setShareMessage] = useState<string | null>(null);
+
+  const handleShare = useCallback(async () => {
+    const shareText = `Track daily expenses with KharchaKitab. Fast Hinglish voice expense tracking on phone. ${SITE_URL}`;
+
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: "KharchaKitab",
+          text: shareText,
+          url: SITE_URL,
+        });
+        posthog.capture("profile_share_clicked", { method: "native_share" });
+        setShareMessage(null);
+        return;
+      }
+
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(shareText);
+        posthog.capture("profile_share_clicked", { method: "clipboard" });
+        setShareMessage("Share link copied. Paste it into WhatsApp or any app.");
+        return;
+      }
+
+      window.open(`https://wa.me/?text=${encodeURIComponent(shareText)}`, "_blank", "noopener,noreferrer");
+      posthog.capture("profile_share_clicked", { method: "whatsapp_fallback" });
+      setShareMessage(null);
+    } catch (error) {
+      // Ignore user-cancelled native share; only surface fallback guidance.
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setShareMessage("Could not open the share sheet right now.");
+    }
+  }, []);
+
+  return (
+    <section className="space-y-6">
+      <div className="space-y-2">
+        <p className="kk-label">Profile</p>
+        <div>
+          <h2 className="text-3xl font-semibold font-[family:var(--font-display)] tracking-tight text-[var(--kk-ink)]">
+            Your setup
+          </h2>
+          <p className="mt-2 max-w-2xl text-sm leading-relaxed text-[var(--kk-ash)]">
+            Manage app preferences, alerts, and household sync from one place.
+          </p>
+        </div>
+      </div>
+
+      <div className="rounded-[calc(var(--kk-radius-lg)+6px)] border border-[var(--kk-smoke)] bg-white/55 p-4 shadow-[var(--kk-shadow-md)] backdrop-blur-sm sm:p-5">
+        <div className="space-y-3">
+          <SectionHeader>Household</SectionHeader>
+          <ActionRow
+            icon={<Users className="h-4 w-4" />}
+            label="Sync & Pairing"
+            description="Connect devices and keep shared expenses in sync."
+            onClick={onOpenSync}
+          />
+
+          <SectionDivider />
+
+          <SectionHeader>Alerts</SectionHeader>
+          <ActionRow
+            icon={<Bell className="h-4 w-4" />}
+            label="Notifications"
+            description="Manage reminders, recurring alerts, and daily nudges."
+            onClick={onOpenNotifications}
+          />
+
+          <SectionDivider />
+
+          <SectionHeader>Preferences</SectionHeader>
+          <div className="space-y-3">
+            <DeviceNameRow />
+            <SettingRow
+              icon={<Coins className="h-4 w-4" />}
+              label="Currency"
+              description="Choose how amounts appear across the app."
+            >
+              <CurrencyToggle />
+            </SettingRow>
+            <SettingRow
+              icon={<Volume2 className="h-4 w-4" />}
+              label="Sound"
+              description="Turn voice and action feedback sounds on or off."
+            >
+              <SoundToggle />
+            </SettingRow>
+          </div>
+
+          <SectionDivider />
+
+          <SectionHeader>Support</SectionHeader>
+          <ActionRow
+            icon={<Share2 className="h-4 w-4" />}
+            label="Share KharchaKitab"
+            description="Send it to friends on WhatsApp or any other app on your phone."
+            onClick={() => void handleShare()}
+          />
+          {shareMessage && (
+            <p className="px-1 text-xs text-[var(--kk-ash)]">
+              {shareMessage}
+            </p>
+          )}
+          <ActionRow
+            icon={<Coffee className="h-4 w-4" />}
+            label="Buy me a coffee"
+            description="Support KharchaKitab if it’s helping your day-to-day."
+            onClick={() => {
+              posthog.capture("buymeacoffee_clicked");
+              window.open("https://razorpay.me/@ankitpandey2708", "_blank", "noopener,noreferrer");
+            }}
+          />
+        </div>
+      </div>
+    </section>
+  );
+});
+
+ProfileView.displayName = "ProfileView";

@@ -5,7 +5,7 @@
 import React, { createContext, useCallback, useContext, useMemo, useState } from "react";
 import { ERROR_MESSAGES } from "@/src/utils/error";
 
-export type AppTab = "summary" | "recurring" | "analytics";
+export type AppTab = "summary" | "recurring" | "analytics" | "profile";
 
 interface NavigationContextValue {
     activeTab: AppTab;

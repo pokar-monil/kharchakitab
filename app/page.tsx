@@ -20,8 +20,6 @@ const BottomTabBar = dynamic(() => import("@/src/components/BottomTabBar").then(
 
 const HomeView = dynamic(() => import("@/src/components/HomeView").then(m => ({ default: m.HomeView })), { ssr: false });
 const RecordingStatus = dynamic(() => import("@/src/components/RecordingStatus").then(m => ({ default: m.RecordingStatus })), { ssr: false });
-const SettingsPopover = dynamic(() => import("@/src/components/SettingsPopover").then(m => ({ default: m.SettingsPopover })), { ssr: false });
-
 const AgentChat = dynamic(() => import("@/src/components/AgentChat").then(m => ({ default: m.AgentChat })), { ssr: false });
 const EditModal = dynamic(() => import("@/src/components/EditModal").then(m => ({ default: m.EditModal })), { ssr: false });
 const AnalyticsView = dynamic(() => import("@/src/components/AnalyticsView").then(m => ({ default: m.AnalyticsView })), { ssr: false });
@@ -30,6 +28,7 @@ const RecurringView = dynamic(() => import("@/src/components/RecurringView").the
 const RecurringEditModal = dynamic(() => import("@/src/components/RecurringEditModal").then(m => ({ default: m.RecurringEditModal })), { ssr: false });
 const NotificationsSettings = dynamic(() => import("@/src/components/NotificationsSettings").then(m => ({ default: m.NotificationsSettings })), { ssr: false });
 const BulkExpensePreview = dynamic(() => import("@/src/components/BulkExpensePreview").then(m => ({ default: m.BulkExpensePreview })), { ssr: false });
+const ProfileView = dynamic(() => import("@/src/components/ProfileView").then(m => ({ default: m.ProfileView })), { ssr: false });
 import { useStreamingSTT } from "@/src/hooks/useStreamingSTT";
 import {
   addTransaction,
@@ -874,11 +873,6 @@ const [isHistoryOpen, setIsHistoryOpen] = useState(false);
               >
                 <Sparkles className="h-4 w-4" style={{ color: "var(--kk-ember)" }} />
               </button>
-              <div className="kk-header-action-divider" />
-              <SettingsPopover
-                onOpenSync={handleOpenSync}
-                onOpenNotifications={handleOpenNotifications}
-              />
             </div>
           </div>
         </div>
@@ -918,6 +912,13 @@ const [isHistoryOpen, setIsHistoryOpen] = useState(false);
             onAddRecurring={handleAddRecurring}
             onEditRecurring={handleEditRecurring}
             onMobileSheetChange={setIsTxnSheetOpen}
+          />
+        </section>
+
+        <section style={{ display: activeTab === "profile" ? undefined : "none" }}>
+          <ProfileView
+            onOpenSync={handleOpenSync}
+            onOpenNotifications={handleOpenNotifications}
           />
         </section>
 
